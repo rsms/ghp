@@ -23,8 +23,7 @@ fi
 #   DEBUG=true
 # fi
 
-# GITREV=$(git rev-parse --short=10 HEAD)
-GITREV=abc123
+GITREV=$(git rev-parse --short=10 HEAD)
 
 # ghp
 pushd ghp >/dev/null
