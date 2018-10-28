@@ -1,0 +1,47 @@
+<!DOCTYPE HTML>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{.Name}}</title>
+    <style>
+    body { font-family: sans-serif; margin: 2rem; }
+    table { border-collapse: collapse; }
+    a { text-decoration:none; }
+    a:hover { text-decoration:underline; }
+    th { text-align: left; }
+    td, th { padding: .3rem 3rem .3rem 0; }
+    td:last-child, th:last-child { padding-right: 0; }
+    .size { font-feature-settings: "zero"; }
+    </style>
+  </head>
+  <body>
+    <h1>Index of {{.Name}}</h1>
+    <table>
+      <thead>
+      <tr>
+        <th>Name</th>
+        <th>Modified</th>
+        <th class="size">Size</th>
+      </tr></thead>
+      <tbody>{{if .Name | fnisroot}}{{else}}<td><a href="../">../</a></td>{{end}}
+      {{range .Files}}{{if .Name | fnisvisible}}<tr>{{if .IsDir}}
+        <td><a href="{{.Name}}/">{{.Name}}/</a></td>
+        <td data-timestamp="{{.ModTime | timestamp}}">{{.ModTime | utcdate}}</td>
+        <td></td>{{ else }}
+        <td><a href="{{.Name}}">{{.Name}}</a></td>
+        <td data-timestamp="{{.ModTime | timestamp}}">{{.ModTime | utcdate}}</td>
+        <td class="size" data-size="{{.Size}}">{{.Size | bytesize}}</td>{{end}}
+      </tr>{{end}}{{end}}</tbody>
+    </table>
+    <script>(function(){
+try {
+  var i = 0, v = document.querySelectorAll('td[data-timestamp]');
+  for (; i < v.length; i++) {
+    v[i].innerText =
+      (new Date(parseInt(v[i].dataset.timestamp) * 1000)).toLocaleString()
+  }
+} catch(_) {}
+    })()</script>
+  </body>
+</html>
