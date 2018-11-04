@@ -1,0 +1,23 @@
+# app configuration
+# we can override any variables defined by ghp/misc/ghp.yaml
+
+# enable development mode
+dev-mode: true
+
+# set public directory
+pub-dir:  pub
+
+# Enable automatic directory listing
+dir-list:
+  enabled: true
+
+# hot-reload servlets live as their source code changes
+servlet:
+  hot-reload: true
+
+# listen on both ipv4 and ipv6 loopback addresses
+http-server:
+  - address: 127.0.0.1
+    port: 8001
+  - address: localhost
+    port: 8002

@@ -8,6 +8,7 @@ import (
   "log"
   "os"
   "time"
+  "sort"
 )
 
 
@@ -86,8 +87,7 @@ func getDirlistTemplate() (*template.Template, error) {
   funcMap["fnisvisible"] = helper_fnisvisible
   funcMap["fnisroot"] = helper_fnisroot
 
-  log.Printf("pjoin(miscdir, dirlist.html) => %s", pjoin(miscdir, "dirlist.html"))
-  t, err := loadTemplate(pjoin(miscdir, "dirlist.html"), funcMap)
+  t, err := loadTemplate(config.DirList.Template, funcMap)
   dirlistHTMLTemplate = t
   dirlistHTMLTemplateErr = err
   if err != nil {
@@ -96,6 +96,11 @@ func getDirlistTemplate() (*template.Template, error) {
 
   return t, err
 }
+
+type ByFilename []os.FileInfo
+func (a ByFilename) Len() int           { return len(a) }
+func (a ByFilename) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
+func (a ByFilename) Less(i, j int) bool { return a[i].Name() < a[j].Name() }
 
 // dirlistHtml generates a HTML directory listing.
 // On failure, an empty string is returned.
@@ -111,6 +116,8 @@ func dirlistHtml(fspath string, userpath string) ([]byte, error) {
   if err != nil {
     return []byte{}, err
   }
+
+  sort.Sort(ByFilename(entries))
 
   w := new(bytes.Buffer)
   t, err := getDirlistTemplate()

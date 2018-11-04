@@ -1,0 +1,23 @@
+---
+type: html
+bob: 123
+subtitle: Subtitle set via page meta
+---
+<!--
+  This is NOT part of a package since there are no other .go files in
+  the current directory. This doesn't really have much of an effect in
+  practice. Simply add a .go file to the directory and define functions
+  and variables to gain access to them here.
+-->
+<html>
+  <body>
+    <h1>{.URL}</h1>
+    {if .Meta.Custom.subtitle}<h2>{.Meta.Custom.subtitle}</h2>{end}
+    <p>{"{timestamp}"} = {timestamp}</p>
+    <p>{"{now | timestamp}"} = {now | timestamp}</p>
+    <p>{"{timestamp now}"} = {timestamp now}</p>
+    <p>{"{now.Unix}"} = {now.Unix}</p>
+    <p>{"{.Meta.Type}"} = {.Meta.Type}</p>
+    <p>{"{.Meta.Custom.bob}"} = {.Meta.Custom.bob}</p>
+  </body>
+</html>

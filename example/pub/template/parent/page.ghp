@@ -1,0 +1,24 @@
+---
+parent: parent.ghp
+---
+
+{if .Subtitle}<h2>{.Subtitle}</h2>{end}
+<p>
+  This page mentions <a href="parent.ghp">parent.ghp</a> as its parent
+  and thus is rendered inside that file.
+</p>
+
+<p>{"{timestamp}"} = {timestamp}</p>
+
+{define "footer"}
+  <p><code>footer</code> redefined by {.URL}</p>
+{end}
+
+<hr>
+<h3>Source of {.URL}</h3>
+<pre>{readfile .URL}</pre>
+<hr>
+{$parentUrl := url .URL "../parent.ghp"}
+<h3>Source of {$parentUrl}</h3>
+<pre>{readfile $parentUrl}</pre>
+<hr>

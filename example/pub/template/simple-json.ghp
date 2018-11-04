@@ -1,0 +1,10 @@
+---
+type: text
+template-delims: ["{{", "}}"]
+headers:
+  Content-Type: application/json
+---
+{
+  "url": "{{.URL}}",
+  "time_now": {{timestamp}}
+}

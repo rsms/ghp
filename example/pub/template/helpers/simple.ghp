@@ -1,0 +1,13 @@
+<!--
+  This is part of a Go package since there are .go files in the same directory.
+  We can call any functions defined in the package and access any
+  package-level variables.
+
+  This file is really a Go html/template.
+-->
+<html>
+  <body>
+    <h1>{.URL}</h1>
+    <pre>{"onePlusTwo"} = 1 + 2 = {onePlusTwo}</pre>
+  </body>
+</html>

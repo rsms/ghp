@@ -1,0 +1,26 @@
+<html>
+  <body>
+    <h1>{.URL}</h1>
+
+    {if .Content}
+      {.Content}
+    {else}
+      <p>
+        This page can be used as a parent template as it includes
+        <code>{"{.Content}"}</code> which will replace this section
+        with whatever page mentions this as its parent.
+      </p>
+      <p>
+        <a href="page.ghp">page.ghp</a> mentions this as its parent.
+      </p>
+    {end}
+
+    {block "footer" .}
+      <p>
+        This is the <code>footer</code> block.
+        It can be overridden by pages that uses this as its parent.
+      </p>
+    {end}
+
+  </body>
+</html>

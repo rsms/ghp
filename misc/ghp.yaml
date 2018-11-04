@@ -1,0 +1,31 @@
+# build products
+build-dir: ${ghpdir}/build
+
+# file directory being served
+pub-dir:  .
+
+# development mode
+dev-mode: true
+
+# http servers
+http-server:
+  - address: 127.0.0.1
+    port: 8002
+
+# directory listing
+dir-list:
+  enabled: false
+  template: ${ghpdir}/misc/dirlist.html
+
+servlet:
+  # build outdated servlets when server starts rather than on-demand.
+  # This makes startup a little slower, but will crash the server right away
+  # if any servlet is broken.
+  preload: true
+
+  # Rebuild & reload servlets live as their source code changes.
+  # Not recommended for production.
+  hot-reload: false
+
+# Custom gopath used for servlets and page helpers
+# gopath: "./my-gopath"

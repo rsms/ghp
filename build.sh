@@ -16,11 +16,12 @@ if [[ "$1" == "-run" ]]; then
   shift
 fi
 
-#
 # DEBUG=false
+# DEBUG_STR="false"
 # if [[ "$1" == "-debug" ]]; then
 #   shift
 #   DEBUG=true
+#   DEBUG_STR="true"
 # fi
 
 GITREV=$(git rev-parse --short=10 HEAD)
