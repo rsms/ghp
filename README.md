@@ -7,19 +7,70 @@ Serve stuff over the interwebs with Go in a PHP-like fashion.
 - Hot-reloading at runtime without the need to restart a server.
 - Source graph optionally computed live for perfect dependency knowledge — change a source file in a far-away dependency and have appropriate GHP endpoints be recompiled and reloaded.
 
-Example:
 
-`hello/index.go`
+### GHP page example:
+
+`layout.ghp`:
+
+```html
+<html>
+  <body>
+    <h1>{.URL}</h1>
+    {.Content}
+  </body>
+</html>
+```
+
+`page.ghp`:
+
+```html
+---
+parent: parent.ghp
+---
+<p>Time: {timestamp}</p>
+```
+
+```
+$ curl -i http://localhost:8001/page.ghp
+HTTP/1.1 200 OK
+Date: Sun, 04 Nov 2018 23:27:01 GMT
+Content-Length: 84
+Content-Type: text/html; charset=utf-8
+
+<html>
+  <body>
+    <h1>/page.ghp</h1>
+    <p>Time: 1541374021</p>
+  </body>
+</html>
+```
+
+### Servlet example
+
+`bar/servlet.go`:
 
 ```go
+package main
+import "ghp"
+
 func ServeHTTP(r ghp.Request, w ghp.Response) {
   w.WriteString("Hello world")
 }
 ```
 
+```
+$ curl -i http://localhost:8001/bar/
+HTTP/1.1 200 OK
+Date: Sun, 04 Nov 2018 23:23:53 GMT
+Content-Length: 11
+Content-Type: text/plain; charset=utf-8
+
+Hello world
+```
+
 ## Usage
 
-```
+```sh
 ./init.sh  # just needed first time
 ./build.sh
 (cd example && ../build/ghp)
