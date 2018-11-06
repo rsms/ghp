@@ -68,8 +68,8 @@ func (c *PageCache) Get(bc *buildCtx, f *os.File, d os.FileInfo) (*Page, error) 
 }
 
 
-// GetCached unconditionally returns a page if one is found in cache, or nil.
-// Note: The caller needs to check p.builderr
+// GetCached unconditionally returns a page if one is found in cache.
+// Caller should check p.builderr
 //
 func (c *PageCache) GetCached(name string) *Page {
   c.itemsmu.RLock()
@@ -85,10 +85,6 @@ func (c *PageCache) GetCached(name string) *Page {
 //
 func (c *PageCache) Build(bc *buildCtx, f *os.File, d os.FileInfo) (*Page, error) {
   name := f.Name()
-
-  // if bc.IsBuilding(name) {
-  //   return nil, fmt.Errorf("cyclic build xx %v", name)
-  // }
 
   c.buildqmu.Lock()
 
@@ -142,67 +138,6 @@ func (c *PageCache) Build(bc *buildCtx, f *os.File, d os.FileInfo) (*Page, error
 
   return p, p.builderr
 }
-
-
-// Old version of build that uses sync.Cond.
-// Cyclic invocations causes panic in bc.Wait().
-/*func (c *PageCache) Build(f *os.File, d os.FileInfo) (*Page, error) {
-  name := f.Name()
-  c.buildqmu.Lock()
-
-  if c.buildq == nil {
-    c.buildq = make(map[string]*sync.Cond)
-  } else if bc := c.buildq[name]; bc != nil {
-    // already in progress of being built
-    c.buildqmu.Unlock()
-
-    // Wait for other goroutine who started the build
-    bc.Wait()
-
-    // Read from items map
-    c.itemsmu.RLock()
-    p := c.items[name]
-    c.itemsmu.RUnlock()
-    // Note: p might be nil here in case build paniced
-    return p, p.builderr
-  }
-  
-  // Calling goroutine is responsible for building. Setup condition in build.
-  bc := sync.NewCond(&sync.Mutex{})
-  c.buildq[name] = bc
-  c.buildqmu.Unlock()
-
-  // Finalization
-  defer func() {
-    // Wake all/any other goroutines that are waiting for the build to complete.
-    // Bracket this with locking of the buildq, and clearing out the cond.
-    c.buildqmu.Lock()
-    bc.Broadcast()
-    delete(c.buildq, name)
-    c.buildqmu.Unlock()
-  }()
-
-  // Build
-  p, err := buildPage(f, d)
-  if err != nil {
-    // On failure, create a page to hold the error so that subsequent
-    // requests for this same page simply returns the error instead of trying
-    // to rebuilt it (which will of course just fail again.)
-    // Note that we set mtime, so that if the source file changes, we do
-    // attempt to rebuild the page again.
-    p = &Page{
-      builderr: err,
-      mtime: time.Now().UnixNano(),
-    }
-  }
-
-  // Place result in items map (full write-lock)
-  c.itemsmu.Lock()
-  c.items[name] = p
-  c.itemsmu.Unlock()
-
-  return p, p.builderr
-}*/
 
 
 func init() {

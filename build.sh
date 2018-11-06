@@ -25,13 +25,14 @@ fi
 # fi
 
 GITREV=$(git rev-parse --short=10 HEAD)
+VERSION=$(cat version.txt)
 
 # ghp
 pushd ghp >/dev/null
 echo "build ghp"
 go build \
   -buildmode=exe \
-  -ldflags="-X main.versionGit=$GITREV" \
+  -ldflags="-X main.ghpVersion=$VERSION -X main.ghpVersionGit=$GITREV" \
   -pkgdir "$SRCDIR/gopath" \
   -o $SRCDIR/build/ghp \
   "$@"

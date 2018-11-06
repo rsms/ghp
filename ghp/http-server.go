@@ -11,6 +11,7 @@ import (
   "strconv"
   "time"
   "path"
+  "ghp"
 )
 
 
@@ -56,35 +57,48 @@ func (s *HttpServer) Close() error {
 }
 
 
-const notFoundBody = "<html><body><h1>404 not found</h1></html>\n"
+const errBody404 = "<html><body><h1>404 not found</h1></body></html>\n"
+const errBody500 = "<html><body><h1>500 internal server error</h1></body></html>\n"
 
 func replyNotFound(w http.ResponseWriter) {
   w.Header().Set("Content-Type", "text/html; charset=utf-8")
-  w.Header().Set("Content-Length", strconv.Itoa(len(notFoundBody)))
+  w.Header().Set("Content-Length", strconv.Itoa(len(errBody404)))
   w.WriteHeader(http.StatusNotFound)
-  io.WriteString(w, notFoundBody)
+  io.WriteString(w, errBody404)
 }
 
 
 func replyError(w http.ResponseWriter, message interface{}) {
-  var msg string
+  var msg, details string
+
   if err, ok := message.(error); ok {
     msg = err.Error()
+    if e, ok := err.(*GoBuildError); ok {
+      details = e.Details
+    }
   } else if s, ok := message.(string); ok {
     msg = s
   }
 
   logf("500 internal server error: %s", msg)
-  w.Header().Set("Content-Type", "text/html; charset=utf-8")
-  w.WriteHeader(http.StatusInternalServerError)
+
+  body := errBody500
 
   if devMode {
-    fmt.Fprintf(w,
-      "<html><body><h1>500 internal server error</h1><pre style='white-space:pre-wrap'>%s\n\n%s</pre></html>\n",
-      html.EscapeString(msg), string(debug.Stack()) )
-  } else {
-    io.WriteString(w, "<html><body><h1>500 internal server error</h1></html>\n")
+    body = fmt.Sprintf(
+      "<html><body>" +
+      "<h1>500 internal server error</h1>" +
+      "<pre style='white-space:pre-wrap'>%s\n\n%s\n</pre>" +
+      "</body></html>\n",
+      html.EscapeString(msg),
+      html.EscapeString(details),
+    )
   }
+
+  w.Header().Set("Content-Type", "text/html; charset=utf-8")
+  w.Header().Set("Content-Length", strconv.Itoa(len(body)))
+  w.WriteHeader(http.StatusInternalServerError)
+  io.WriteString(w, body)
 }
 
 
@@ -135,20 +149,20 @@ func serveServlet(fspath string, d os.FileInfo, w http.ResponseWriter, r *http.R
   }
 
   // get filename relative to pubdir
-  filename, err := relPubPath(fspath)
+  filename, err := filepath.Rel(config.PubDir, fspath)
   if err != nil {
-    replyError(w, "unexpected condition: servlet fspath not rooted in pub-dir")
+    replyError(w, err)
     return
   }
 
-  s, err := servletCache.GetServlet(filename)
+  s, err := servletCache.Get(filename)
   if err != nil {
     replyError(w, err)
   } else if s.serveHTTP == nil {
     replyError(w, "missing ServeHTTP")
   } else {
-    req := &RequestImpl{r: r}
-    res := &ResponseImpl{w: w}
+    req := &ghp.Request{Request: r}
+    res := &ServletResponse{w: w}
     s.serveHTTP(req, res)
   }
 }

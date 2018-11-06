@@ -10,7 +10,6 @@ type FileScanVisitor = func (dir string, names []string) error
 
 
 func FileScan(dir string, visitor FileScanVisitor) error {
-  logf("FileScan %v", dir)
   f, err := os.Open(dir)
   if err != nil {
     return err

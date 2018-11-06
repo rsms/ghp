@@ -1,10 +1,8 @@
 package main
 
 import (
-  "bytes"
   "ghp"
   "os"
-  "os/exec"
   "path/filepath"
   "plugin"
   "sort"
@@ -14,24 +12,24 @@ import (
 )
 
 type ServletCache struct {
-  srcdir      string  // where servlet sources are located
-  builddir    string  // where servlet .so files are stored
-  gopath      string  // contains ghp; added to GOPATH
+  srcdir   string  // where servlet sources are located
+  builddir string  // where servlet .so files are stored
+  gopath   string  // contains ghp; added to GOPATH
 
-  servlets   map[string]*Servlet  // ready servlets
-  servletsmu sync.RWMutex
+  items    map[string]*Servlet  // ready servlets
+  itemsmu  sync.RWMutex
 
-  buildq     map[string]*sync.Cond  // servlets in process of building
-  buildqmu   sync.Mutex
+  buildq   map[string]chan *Servlet
+  buildqmu sync.Mutex
 }
 
 
 func NewServletCache(srcdir, builddir, gopath string) *ServletCache {
   return &ServletCache{
-    srcdir:      srcdir,
-    builddir:    builddir,
-    gopath:      gopath,
-    servlets:    make(map[string]*Servlet),
+    srcdir:   srcdir,
+    builddir: builddir,
+    gopath:   gopath,
+    items:    make(map[string]*Servlet),
   }
 }
 
@@ -48,14 +46,11 @@ func (c *ServletCache) LoadAll() error {
         // it's a servlet
         wg.Add(1)
         go func() {
-          servletdir, err := relPubPath(dir)
+          servletdir, err := filepath.Rel(config.PubDir, dir)
           if err != nil {
             maybeSendError(errch, err)
-          } else {
-            _, err := c.GetServlet(servletdir)
-            if err != nil {
-              maybeSendError(errch, err)
-            }
+          } else if _, err := c.Get(servletdir); err != nil {
+            maybeSendError(errch, err)
           }
           wg.Done()
         }()
@@ -96,115 +91,116 @@ func (c *ServletCache) LoadAll() error {
 // requests for a fauly returns the same error and servlet, until either
 // the servlet has be rebuilt or emoved.
 //
-func (c *ServletCache) GetServlet(name string) (*Servlet, error) {
+func (c *ServletCache) Get(name string) (*Servlet, error) {
+  s := c.GetCached(name)
+  if s != nil && (s.srcGraph == nil || s.version > s.srcGraph.mtime) {
+    return s, s.builderr
+  }
+  return c.Build(name, s)
+}
+
+
+// GetCached unconditionally returns a servlet if one is found in cache.
+// Caller should check p.builderr
+//
+func (c *ServletCache) GetCached(name string) *Servlet {
   if devMode {
-    if len(name) == 0 {
-      return nil, errorf("empty name")
-    }
-    if filepath.IsAbs(name) {
-      return nil, errorf("absolute name %v provided to GetServlet", name)
-    }
+    assert(len(name) > 0, "empty name")
+    assert(!filepath.IsAbs(name), "absolute name %v", name)
   }
+  c.itemsmu.RLock()
+  s := c.items[name]
+  c.itemsmu.RUnlock()
+  return s
+}
 
-  // fetch already-built servlet
-  c.servletsmu.RLock()
-  s := c.servlets[name]
-  c.servletsmu.RUnlock()
 
-  if s != nil {
-    // We found a servlet
-    if s.srcGraph != nil {
-      // Source code is being observed.
-      // Check if library file is newer than source code
-      if s.version > s.srcGraph.mtime {
-        // up to date
-        // logf("[servlet] use preloaded %q/%d (src/%d)",
-        //   name, s.version, s.srcGraph.mtime)
-        return s, s.builderr
-      }
-      // Outdated -- continue with building the servlet.
-      // logf("[servlet] outdated %q/%d", name, s.version)
-    } else {
-      // Not observing source code. We're good.
-      // logf("[servlet] use preloaded %q/%d", name, s.version)
-      return s, s.builderr
-    }
-  }
-
-  // Build and load servlet, or wait until it's been loaded
+// Build builds the servlet from source file f.
+//
+// If prevs is not nil, its resources may be transferred to the newly-build
+// servlet. For instance, its source graph.
+//
+// This is concurrency-safe; multiple calls while a page is being built are
+// all multiplexed to the same "build".
+//
+func (c *ServletCache) Build(name string, prevs *Servlet) (*Servlet, error) {
   c.buildqmu.Lock()
 
   if c.buildq == nil {
-    c.buildq = make(map[string]*sync.Cond)
-  } else if bc := c.buildq[name]; bc != nil {
-    // Servlet is already in progress of being built
+    c.buildq = make(map[string]chan *Servlet)
+  } else if bch, ok := c.buildq[name]; ok {
+    // already in progress of being built
+
+    // done with buildq
     c.buildqmu.Unlock()
 
     // Wait for other goroutine who started the build
-    bc.Wait()
-
-    // Read servlet from servlets map
-    c.servletsmu.RLock()
-    s = c.servlets[name]
-    c.servletsmu.RUnlock()
-    if s == nil {
-      panic("c.servlets[name]==nil")
-    }
+    s := <- bch
+    
     return s, s.builderr
   }
-  
-  // Calling goroutine is responsible for building the servlet.
-  // Setup a condition in the buildq
-  bc := sync.NewCond(&sync.Mutex{})
-  c.buildq[name] = bc
-  c.buildqmu.Unlock()
 
-  // Build & load
-  s2 := &Servlet{name: name}
-  s2.ctx = &servletContext{s: s2}
-  if s == nil {
-    // watch source for changes, if enabled
+  // If we get here, name was not found in buildq
+
+  // Calling goroutine is responsible for building. Setup condition in build.
+  bch := make(chan *Servlet)
+  c.buildq[name] = bch
+  c.buildqmu.Unlock()  // done with buildq
+
+  // Create new servlet
+  s := NewServlet(c.servletDir(name), name)
+  s.version = time.Now().UnixNano()
+
+  // Build
+  if prevs == nil {  // no previous servlet instance
     if config.Servlet.HotReload {
-      srcdir := c.servletDir(s2.name)
-      s2.srcGraph = NewSrcGraph(srcdir)
-      if err := s2.srcGraph.Scan(); err != nil {
-        s2.builderr = err
-        logf("[servlet] error while scanning %q: %s", srcdir, err.Error())
+      err := s.initHotReload()
+      if err != nil {
+        logf("[servlet %q] initHotReload error: %s", s, err.Error())
       }
     }
-    s2.version = time.Now().UnixNano()
-    c.buildAndLoadServletInit(s2)
+    c.buildAndLoadServletInit(s)
   } else {
-    s2.version = time.Now().UnixNano()
-    c.buildAndLoadServlet(s2)
+    c.buildAndLoadServlet(s)
   }
 
-  // Place result in servlets map (full write-lock)
-  c.servletsmu.Lock()
-  if s != nil {
-    // transfer source graph from s to s2
-    s2.srcGraph, s.srcGraph = s.srcGraph, s2.srcGraph
+  // Place result in items map (full write-lock)
+  c.itemsmu.Lock()
+  if prevs != nil {
+    // transfer source graph from prevs to s
+    s.srcGraph, prevs.srcGraph = prevs.srcGraph, s.srcGraph
   }
-  c.servlets[name] = s2
-  c.servletsmu.Unlock()
+  c.items[name] = s  // Note: replaces prevs, if any
+  c.itemsmu.Unlock()
 
-  // Wake all/any other goroutines that are waiting for the build to complete.
-  // Bracket this with locking of the buildq, and clearing out the cond.
+  // Cleanup any replaced servlet
+  if prevs != nil {
+    go func() {
+      os.Remove(c.servletLibFile(prevs.name, prevs.version))
+      if prevs.stopFun != nil {
+        prevs.stopFun(prevs.ctx)
+      }
+      prevs.Dealloc()
+    }()
+  }
+
+  // Clear buildq and send on chan
   c.buildqmu.Lock()
-  bc.Broadcast()
+
+  // Send build page to anyone who is listening
+  broadcast_loop:
+  for {
+    select {
+    case bch <- s:
+    default:
+      break broadcast_loop
+    }
+  }
+  
   delete(c.buildq, name)
   c.buildqmu.Unlock()
 
-  // Deallocate any replaced servlet
-  if s != nil {
-    os.Remove(c.servletLibFile(s.name, s.version))
-    if s.stopFun != nil {
-      s.stopFun(s.ctx)
-    }
-    s.Dealloc()
-  }
-
-  return s2, s2.builderr
+  return s, s.builderr
 }
 
 
@@ -325,62 +321,7 @@ func (c *ServletCache) buildAndLoadServlet(s *Servlet) {
 }
 
 
-func (c *ServletCache) buildServlet(s *Servlet, libfile string) error {
-  srcdir := c.servletDir(s.name)
-  // libfile := c.servletLibFile(s.name, s.version)
-  // builddir := pjoin(c.builddir, s.name)
 
-  logf("[servlet] building %s -> %q", s, libfile)
-
-  // TODO: make-like individual-files build cache, where we only
-  // rebuild the .go files that doesn't have corresponding up-to-date
-  // .o files in a cache directory.
-
-  // TODO: consider resolving "go" at startup and panic if it can't be found.
-
-  // build servlet as plugin package
-  cmd := exec.Command(
-    "go", "build",
-    "-buildmode=plugin",
-    // "-gcflags", "-p " + libfile,
-    "-ldflags", "-pluginpath=" + libfile,  // needed for uniqueness
-    "-o", libfile,
-  )
-
-  // set working directory to servlet's source directory
-  cmd.Dir = srcdir
-
-  // set env
-  cmd.Env = config.getGoProcEnv()
-
-  // buffer output
-  var outbuf bytes.Buffer
-  var errbuf bytes.Buffer
-  cmd.Stdout = &outbuf
-  cmd.Stderr = &errbuf
-
-  // execute program; errors if exit status != 0
-  if err := cmd.Run(); err != nil {
-    logf("[servlet] build failure: %s (%q)\n", err.Error(), errbuf.String())
-    return errorf("failed to build servlet %q", s.name)
-  }
-
-  // if outbuf.Len() > 0 {
-  //   logf("stdout: %q\n", outbuf.String())
-  // }
-  // if errbuf.Len() > 0 {
-  //   logf("stderr: %q\n", errbuf.String())
-  // }
-
-  // set s.version to lib file mtime
-  libstat, err := os.Stat(libfile)
-  if err != nil {
-    return err
-  }
-  s.version = libstat.ModTime().UnixNano()
-
-  return nil
-}
 
 
 func (c *ServletCache) loadServlet(s *Servlet, libfile string) error {

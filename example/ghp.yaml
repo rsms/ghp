@@ -1,9 +1,6 @@
 # app configuration
 # we can override any variables defined by ghp/misc/ghp.yaml
 
-# enable development mode
-dev-mode: true
-
 # set public directory
 pub-dir:  pub
 

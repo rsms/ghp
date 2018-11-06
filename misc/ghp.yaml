@@ -4,9 +4,6 @@ build-dir: ${ghpdir}/build
 # file directory being served
 pub-dir:  .
 
-# development mode
-dev-mode: true
-
 # http servers
 http-server:
   - address: 127.0.0.1
@@ -21,7 +18,7 @@ servlet:
   # build outdated servlets when server starts rather than on-demand.
   # This makes startup a little slower, but will crash the server right away
   # if any servlet is broken.
-  preload: true
+  preload: false
 
   # Rebuild & reload servlets live as their source code changes.
   # Not recommended for production.

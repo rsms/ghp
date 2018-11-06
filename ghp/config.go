@@ -19,7 +19,6 @@ type HttpServerConfig struct {
 type Config struct {
   Gopath   string
   BuildDir string `yaml:"build-dir"`
-  DevMode  bool   `yaml:"dev-mode"`
   PubDir   string `yaml:"pub-dir"`
 
   HttpServer []*HttpServerConfig `yaml:"http-server"`
@@ -55,18 +54,21 @@ func (c *Config) load(r io.Reader) error {
 
 
 func (c *Config) writeYaml(w io.Writer) error {
-  // d, err := yaml.Marshal(c)
-  // if err != nil {
-  //   return err
-  // }
-  // d = bytes.Replace(d, []byte(ghpdir + "/"), []byte("${ghpdir}/"), -1)
-  // d = bytes.Replace(d, []byte(ghpdir + "\n"), []byte("${ghpdir}\n"), -1)
-  // d = bytes.Replace(d, []byte(ghpdir + "\""), []byte("${ghpdir}\""), -1)
-  // r := bytes.NewReader(d)
-  // _, err = r.WriteTo(w)
-  // return err
   return yaml.NewEncoder(w).Encode(c)
 }
+
+// func (c *Config) writeYaml(w io.Writer) error {
+//   d, err := yaml.Marshal(c)
+//   if err != nil {
+//     return err
+//   }
+//   d = bytes.Replace(d, []byte(ghpdir + "/"), []byte("${ghpdir}/"), -1)
+//   d = bytes.Replace(d, []byte(ghpdir + "\n"), []byte("${ghpdir}\n"), -1)
+//   d = bytes.Replace(d, []byte(ghpdir + "\""), []byte("${ghpdir}\""), -1)
+//   r := bytes.NewReader(d)
+//   _, err = r.WriteTo(w)
+//   return err
+// }
 
 
 func (c *Config) getGoProcEnv() []string {
@@ -92,7 +94,6 @@ func (c *Config) getGoProcEnv() []string {
 }
 
 
-
 func openUserConfigFile() (*os.File, error) {
   // try different locations
   locations := []string{
@@ -112,7 +113,13 @@ func openUserConfigFile() (*os.File, error) {
 }
 
 
-func loadConfig() (*Config, error) {
+// loadConfig loads configuration from ghpdir/misc/ghp.yaml. In addition,
+// this function also loads _either_ explicitFile _or_ a ghp.yaml file
+// in the current directory, if one is found.
+// This additional config file overrides configuration properties set by
+// ghpdir/misc/ghp.yaml.
+//
+func loadConfig(explicitFile string) (*Config, error) {
   c := &Config{}
 
   // load base config
@@ -131,7 +138,11 @@ func loadConfig() (*Config, error) {
   }
 
   // load optional user config, which can override any config properties
-  f, err = openUserConfigFile()
+  if explicitFile != "" {
+    f, err = os.Open(explicitFile)
+  } else {
+    f, err = openUserConfigFile()
+  }
   if err != nil {
     return nil, err
   }

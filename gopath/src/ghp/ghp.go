@@ -1,7 +1,8 @@
 package ghp
 
 import (
-  "net/url"
+  // "net/url"
+  "net/http"
 )
 
 // StartServlet is called when a servlet is initialized.
@@ -24,7 +25,7 @@ type StopServlet = func(ServletContext)
 // This is essentially a go net/http.Handler function, so anything you'd do
 // in a net/http.Handler function, you can do here.
 //
-type ServeHTTP = func(Request, Response)
+type ServeHTTP = func(*Request, Response)
 
 // ServletContext represents the servlet instance itself.
 //
@@ -35,16 +36,17 @@ type ServletContext interface {
 
 // Request represents a HTTP request.
 //
-type Request interface {
-  Url() *url.URL
-  UnderlyingObject() interface{}  // *http.Request
+type Request struct {
+  *http.Request
 }
 
 // Response represents a HTTP response.
 // Implements io.Writable
+// Implements http.ResponseWriter
 //
 type Response interface {
-  WriteString(string) (int, error)
+  Header() http.Header
   Write([]byte) (int, error)
-  UnderlyingObject() interface{}  // http.ResponseWriter
+  WriteString(string) (int, error)
+  WriteHeader(statusCode int)
 }

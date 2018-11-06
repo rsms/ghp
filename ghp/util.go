@@ -30,9 +30,19 @@ func assert(cond bool, info... interface{}) {
   }
 }
 
-// relPubPath returns filename relative to pubdir
-func relPubPath(filename string) (string, error) {
-  return filepath.Rel(config.PubDir, filename)
+// pubfilename returns a publicly-presentable filename.
+//
+// If it's relative to PubDir, then "/PubDir/filename" is returned,
+// otherwise the basename of the filename is returned.
+//
+// Useful for including filenames in messages e.g. sent as a HTTP response.
+//
+func pubfilename(filename string) string {
+  s, err := filepath.Rel(config.PubDir, filename)
+  if err == nil && len(s) > 0 {
+    return "/" + s
+  }
+  return filepath.Base(filename)
 }
 
 func pathIsDotRelative(name string) bool {

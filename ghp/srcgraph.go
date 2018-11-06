@@ -16,6 +16,8 @@ import (
   "github.com/fsnotify/fsnotify"
 )
 
+const sgDevMode = false  // enable to print WIP debug messages
+
 // --------------------------------------------------------------------------
 
 type SrcFile struct {
@@ -124,6 +126,13 @@ func NewSrcGraph(rootdir string) *SrcGraph {
 }
 
 
+func (g *SrcGraph) logd(msg string, v... interface{}) {
+  if sgDevMode {
+    fmt.Printf("[SG] " + msg, v...)
+  }
+}
+
+
 func (g *SrcGraph) Scan() error {
   g.mu.Lock()
   defer g.mu.Unlock()
@@ -149,11 +158,20 @@ func (g *SrcGraph) Scan() error {
     return err
   }
 
-  // print some info on packages
-  g.logInfo()
-  log.Printf("[sg] mtime: %v\n", g.mtime)
+  // print some info on packages and source files
+  if sgDevMode {
+    g.logInfo()
+    g.logd("[sg] mtime: %v\n", g.mtime)
+  }
 
   return nil
+}
+
+
+func (g *SrcGraph) Close() {
+  if g.fswatcher != nil {
+    g.stopFSWatcher()
+  }
 }
 
 
@@ -198,9 +216,9 @@ func (g *SrcGraph) initFSWatcher() error {
     absdir := filepath.Join(g.rootdir, p.dir)
     if err := g.fswatcher.Add(absdir); err != nil {
       // print error and continue range iteration
-      log.Printf("[sg/fswatcher] failed to watch %q: %s", absdir, err.Error())
+      g.logd("[fswatcher] failed to watch %q: %s", absdir, err.Error())
     } else {
-      log.Printf("[sg/fswatcher] watching %q", absdir)
+      g.logd("[fswatcher] watching %q", absdir)
     }
     return true
   })
@@ -222,7 +240,7 @@ func (g *SrcGraph) stopFSWatcher() {
 
 
 func (g *SrcGraph) logInfo() {
-  print("packages:\n")
+  print("[SG] packages:\n")
   g.pkgmap.Range(func(k, v interface{}) bool {
     p := v.(*SrcPackage)
     fmt.Printf("  %q (srcmtime: %+v, depmtime: %+v",
@@ -258,14 +276,14 @@ func (g *SrcGraph) scanImport(path, parentDir string) (*SrcPackage, error) {
 
   if !strings.HasPrefix(pkg.Dir, g.rootdir) {
     // outside package (not tracked)
-    log.Printf("[sg/scanImport] ignore outside pkg %q", pkg.Dir)
+    g.logd("[scanImport] ignore outside pkg %q", pkg.Dir)
     return nil, nil
   }
 
   reldir := pkg.Dir[len(g.rootdir)+1:]
 
   if pobj, ok := g.pkgmap.Load(reldir); ok {
-    log.Printf("[sg/scanImport] ret already-scanned pkg %q", reldir)
+    g.logd("[scanImport] ret already-scanned pkg %q", reldir)
     return pobj.(*SrcPackage), nil
   }
 
@@ -335,7 +353,7 @@ func (g *SrcGraph) addSrcFile(p *SrcPackage, name string) (*SrcFile, bool, error
     pkg:   p,
   }
 
-  log.Printf("[sg/pkg %q] srcfile %q %+v\n", p.dir, name, f)
+  g.logd("[pkg %q] srcfile %q %+v\n", p.dir, name, f)
   g.filemap.Store(name, f)
 
   var firstfile bool
@@ -349,7 +367,7 @@ func (g *SrcGraph) addSrcFile(p *SrcPackage, name string) (*SrcFile, bool, error
 
 func (g *SrcGraph) onGraphModified(mtime int64) {
   if g.updateMtime(mtime) {
-    log.Printf("[sg] graph modified; mtime %v", mtime)
+    g.logd("graph modified; mtime %v", mtime)
   }
 }
 
@@ -358,7 +376,7 @@ func (g *SrcGraph) onGraphModified(mtime int64) {
 //   reldir := pkg.Dir[len(g.rootdir)+1:]
 
 //   if pobj, ok := g.pkgmap.Load(reldir); ok {
-//     log.Printf("[srcgraph/scanImport] ret already-scanned pkg %q", reldir)
+//     g.logd("[scanImport] ret already-scanned pkg %q", reldir)
 //     return pobj.(*SrcPackage), nil
 //   }
 
@@ -383,7 +401,7 @@ func (g *SrcGraph) updateScanFile(f *SrcFile) error {
   }
 
   // scan file imports
-  fmt.Printf("[sg/updateScanFile] packages imported by %q:\n", f.name)
+  g.logd("[sg/updateScanFile] packages imported by %q:\n", f.name)
   for _, s := range a.Imports {
     impath := s.Path.Value[1:len(s.Path.Value)-1] // strip enclosing ""
 
@@ -392,7 +410,7 @@ func (g *SrcGraph) updateScanFile(f *SrcFile) error {
       continue
     }
 
-    fmt.Printf("- import %q\n", impath)
+    g.logd("- import %q\n", impath)
 
     pkgdir := filepath.Join(f.pkg.dir, impath)
 
@@ -402,7 +420,7 @@ func (g *SrcGraph) updateScanFile(f *SrcFile) error {
       continue
     }
 
-    fmt.Printf("  - unregistered package %q\n", pkgdir)
+    g.logd("  - unregistered package %q\n", pkgdir)
 
     // absdir := filepath.Join(g.rootdir, imppkgdir)
     // if err := g.fswatcher.Add(absdir); err != nil {
@@ -415,7 +433,7 @@ func (g *SrcGraph) updateScanFile(f *SrcFile) error {
 
 func (g *SrcGraph) onPackageSrcModified(p *SrcPackage, mtime int64) {
   if p.updateSrcmtime(mtime) {
-    log.Printf("[sg] package %q modified; mtime %v", p.dir, mtime)
+    g.logd("package %q modified; mtime %v", p.dir, mtime)
     // g.updateScanPkg(p)
     g.onGraphModified(mtime)
   }
@@ -423,7 +441,7 @@ func (g *SrcGraph) onPackageSrcModified(p *SrcPackage, mtime int64) {
 
 
 func (g *SrcGraph) onPackageEmptied(p *SrcPackage, mtime int64) {
-  log.Printf("[sg] package %q was emptied", p.dir)
+  g.logd("package %q was emptied", p.dir)
   g.onPackageSrcModified(p, mtime)
   // Maybe just do nothing?
   // For instance, it's very possible that with a single-file package, when
@@ -439,17 +457,17 @@ func (g *SrcGraph) onPackageEmptied(p *SrcPackage, mtime int64) {
 
 
 func (g *SrcGraph) onPackageResuscitated(p *SrcPackage, mtime int64) {
-  log.Printf("[sg] package %q was resuscitated", p.dir)
+  g.logd("package %q was resuscitated", p.dir)
   g.onPackageSrcModified(p, mtime)
 }
 
 
 func (g *SrcGraph) onFileModified(f *SrcFile, mtime int64) {
   if f.updateMtime(mtime) {
-    log.Printf("[sg] file %q modified; mtime %v", f.name, mtime)
+    g.logd("file %q modified; mtime %v", f.name, mtime)
     err := g.updateScanFile(f)
     if err != nil {
-      log.Printf("[sg] updateScanFile failed for %q: %s", f.name, err.Error())
+      g.logd("updateScanFile failed for %q: %s", f.name, err.Error())
     }
     g.onPackageSrcModified(f.pkg, mtime)
   }
@@ -457,7 +475,7 @@ func (g *SrcGraph) onFileModified(f *SrcFile, mtime int64) {
 
 
 func (g *SrcGraph) onFileDisappeared(f *SrcFile, relname string) {
-  log.Printf("[sg] file %q disappeared", f.name)
+  g.logd("file %q disappeared", f.name)
   pkg := f.pkg
 
   g.filemap.Delete(relname)
@@ -483,12 +501,12 @@ func (g *SrcGraph) handleFSEvent(e *fsnotify.Event) {
   }
 
   if !strings.HasPrefix(e.Name, g.rootdir) {
-    log.Printf("[sg/fswatch] unexpected file outside rootdir %q", e.Name)
+    g.logd("[fswatch] unexpected file outside rootdir %q", e.Name)
     return
   }
 
   name := e.Name[len(g.rootdir)+1:]
-  fmt.Printf("%- 6s %s\n", e.Op.String(), name)
+  g.logd("%- 6s %s\n", e.Op.String(), name)
 
   // look up file
   v, ok := g.filemap.Load(name)
@@ -501,7 +519,7 @@ func (g *SrcGraph) handleFSEvent(e *fsnotify.Event) {
         g.onFileModified(f, d.ModTime().UnixNano())
       } else {
         // treat this condition as file disappeared since stat failed
-        log.Printf("[sg/fswatch] stat failed after event %s on %q: %s",
+        g.logd("[fswatch] stat failed after event %s on %q: %s",
           e.Op.String(), e.Name, err.Error())
         g.onFileDisappeared(f, name)
       }
@@ -533,7 +551,7 @@ func (g *SrcGraph) handleFSEvent(e *fsnotify.Event) {
         // file added to existing package
         f, firstfile, err := g.addSrcFile(pkg, name)
         if err != nil {
-          log.Printf("[sg/fswatch] file reg error %q: %s", name, err.Error())
+          g.logd("[fswatch] file reg error %q: %s", name, err.Error())
         } else if firstfile {
           g.onPackageResuscitated(pkg, f.mtime)
         } else {
@@ -548,7 +566,7 @@ func (g *SrcGraph) handleFSEvent(e *fsnotify.Event) {
       //   // be edited (and we will update its mtime.)
       }
     // } else {
-    //   fmt.Printf("build.Default.MatchFile(%q, %q) => false (err=%+v)\n",
+    //   g.logd("build.Default.MatchFile(%q, %q) => false (err=%+v)\n",
     //     filepath.Dir(e.Name), filepath.Base(e.Name), err)
     }
   }
@@ -649,7 +667,7 @@ func (g *SrcGraph) fswatcherEventLoop() {
 //   if err != nil {
 //     return err
 //   }
-//   log.Printf("path=%q, d.Name()=%q\n", path, d.Name())
+//   g.logd("path=%q, d.Name()=%q\n", path, d.Name())
 
 //   if d.IsDir() {
 //     return filepath.SkipDir
