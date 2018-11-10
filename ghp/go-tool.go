@@ -2,8 +2,6 @@ package main
 
 import (
   "bytes"
-  "compress/gzip"
-  "net/http"
   "os"
   "os/exec"
   "path/filepath"
@@ -49,10 +47,6 @@ func (g *GoTool) RunBufferedIO() (stdout bytes.Buffer, stderr bytes.Buffer, err 
 
 
 // InitGoTool initializes the go tool.
-//
-// It might download it from the internet in case Config.Go.Autofetch is
-// enabled. This means it could take some time.
-//
 // Config must be loaded when this function is called.
 //
 func InitGoTool() error {
@@ -152,114 +146,6 @@ func getGoProgramVersion(program string) (string, error) {
 
   version := sv[1] + "." + sv[2] + "-" + sv[3]
   return version, nil
-}
-
-
-func fetchGoProgram(name, filename string) error {
-  // Does the system contain the required go version?
-  sysfile, err := findSystemGoProgram()
-  if sysfile != "" {
-    if err == nil {
-      _, err = copyfile(sysfile, filename)
-    }
-    return err
-  }
-  
-  // We did not find the go program locally.
-
-  // Log any error from findSystemGoProgram (ignored)
-  if err != nil && devMode {
-    logf("findSystemGoProgram: %s", err.Error())
-  }
-
-  if config.Go.Autofetch {
-    // Autofetch is enabled -- fetch the go binary from the internet
-    return fetchGoProgramRemote(name, filename)
-  }
-
-  return errorf(
-    "go binary %q not found "+
-    "(enable go.autofetch in config for automatic download)",
-    filename,
-  )
-}
-
-
-func findSystemGoProgram() (string, error) {
-  gofile := pjoin(runtime.GOROOT(), "bin", "go")
-
-  st, err := os.Stat(gofile)
-  if os.IsNotExist(err) || !st.Mode().IsRegular() {
-    return "", nil
-  }
-
-  // check version of program by executing "go version"
-  cmd := exec.Command(gofile, "version")
-  cmd.Env = append(os.Environ(),
-    "GOROOT=" + runtime.GOROOT(),
-  )
-  var outbuf bytes.Buffer
-  cmd.Stdout = &outbuf
-  if err = cmd.Run(); err != nil {
-    return "", err
-  }
-  stdout := outbuf.String()
-
-  // Parse output.
-  // It looks like this: "go version go1.11.2 darwin/amd64"
-  re := regexp.MustCompile(`(?:^|\s+)(go\d+\.\d+\.\d+)\s+([^/]+)/(.+)`)
-  sv := re.FindStringSubmatch(stdout)
-  if len(sv) != 4 {
-    return "", errorf("'go version' returned unparsable output %q", stdout)
-  }
-  if sv[1] != runtime.Version() {
-    return "", errorf("version mismatch %q != %q", sv[1], runtime.Version())
-  }
-  if sv[2] != runtime.GOOS {
-    return "", errorf("platform mismatch %q != %q", sv[2], runtime.GOOS)
-  }
-  if sv[3] != runtime.GOARCH {
-    return "", errorf("arch mismatch %q != %q", sv[3], runtime.GOARCH)
-  }
-
-  // version, platform and arch matches
-  return gofile, nil
-}
-
-
-func fetchGoProgramRemote(name, filename string) error {
-  archiveFile := name + ".tar.gz"
-  url := "https://dl.google.com/go/" + archiveFile
-  logf("fetching %v", url)
-
-  // HTTP GET
-  res, err := http.Get(url)
-  if err != nil {
-    return err
-  }
-  defer res.Body.Close()
-
-  // write to temporary file
-  tmpfile := pjoin(os.TempDir(), filepath.Base(filename))
-
-  // gzip filter
-  gzf, err := gzip.NewReader(res.Body)
-  if err != nil {
-    panic(err)
-  }
-
-  // extract bin/go
-  if err = TarExtractFile(gzf, "go/bin/go", tmpfile); err != nil {
-    os.Remove(tmpfile)
-    return err
-  }
-
-  if err = os.MkdirAll(filepath.Dir(filename), 0777); err != nil {
-    os.Remove(tmpfile)
-    return err
-  }
-
-  return os.Rename(tmpfile, filename)
 }
 
 

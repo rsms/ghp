@@ -1,6 +1,7 @@
 package main
 
 import (
+  "fmt"
   "ghp"
   "plugin"
 )
@@ -28,13 +29,41 @@ func NewServlet(dir, name string) *Servlet {
 }
 
 
+func (s *Servlet) Build() error {
+  logf("[servlet] building %s -> %q", s, s.libfile)
+
+  g := NewGoTool(
+    "build",
+    "-buildmode=plugin",
+    // "-gcflags", "-p " + libfile,
+    "-ldflags", "-pluginpath=" + s.libfile,  // needed for uniqueness
+    "-o", s.libfile,
+  )
+
+  // set working directory to servlet's source directory
+  g.Cmd.Dir = s.dir
+
+  // run go build
+  _, stderr, err := g.RunBufferedIO()
+  if err != nil {
+    logf("[servlet] go build failed: %s\n%s", err.Error(), stderr.String())
+    return makeGoBuildError(
+      fmt.Sprintf("failed to build servlet %q", s.name),
+      s.dir,
+      stderr.String(),
+    )
+  }
+
+  return nil
+}
+
+
 func (s *Servlet) Load() error {
-  logf("loading servlet %q from %q", s.name, s.libfile)
+  logf("[servlet] loading %q from %q", s.name, s.libfile)
 
   o, err := plugin.Open(s.libfile)
   if err != nil {
-    logf("plugin.Open failed: %v", err)
-    return err
+    return errorf("plugin.Open failed: %v", err)
   }
 
   // ServeHTTP
@@ -69,17 +98,6 @@ func (s *Servlet) Load() error {
 
   return nil
 }
-
-
-// func (s *Servlet) setVersionAndLibFile(libdir string, version int64) {
-//   s.version = version
-//   s.libfile = servletLibFile(libdir, s.name, version)
-// }
-
-
-// func servletLibFile(libdir, name string, version int64) string {
-//   return pjoin(libdir, name, strconv.FormatInt(version, 10) + ".so")
-// }
 
 
 // Dealloc is called when a servlet instance is no longer used and never will

@@ -22,8 +22,7 @@ type ServletConfig struct {
 }
 
 type GoConfig struct {
-  Autofetch bool
-  Gopath    string  // in addition to ghpdir/gopath
+  Gopath string  // in addition to ghpdir/gopath
 }
 
 type Config struct {

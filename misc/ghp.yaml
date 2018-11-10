@@ -31,19 +31,6 @@ servlet:
   # Setting this to false causes servlets to be rebuilt after ghp is restarted.
   recycle: true
 
-go:
-  # autofetch enables automatic fetching of go binaries from
-  # https://dl.google.com/go/ when it cannot be found for the platform.
-  # This is useful for when ghp is deployed on a different system than
-  # where it was built. The version fetched will match the version of go
-  # which was used to build ghp.
-  autofetch: true
-
-  # Custom GOPATH used for servlets and page helpers
-  gopath: "./my-gopath"
-
-# gobin is a file directory path in where to find the go binaries,
-# used to build servlets.
-# If this is empty or not provided, go will be looked up in the
-# environment (i.e. PATH).
-# gobin: "./special-go-version"
+# go:
+#   # Custom GOPATH used for servlets and page helpers
+#   gopath: "./my-gopath"
