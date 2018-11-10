@@ -1,10 +1,8 @@
 package main
 
 import (
-  "ghp"
   "os"
   "path/filepath"
-  "plugin"
   "sort"
   "sync"
   "strconv"
@@ -14,7 +12,6 @@ import (
 type ServletCache struct {
   srcdir   string  // where servlet sources are located
   builddir string  // where servlet .so files are stored
-  gopath   string  // contains ghp; added to GOPATH
 
   items    map[string]*Servlet  // ready servlets
   itemsmu  sync.RWMutex
@@ -24,11 +21,10 @@ type ServletCache struct {
 }
 
 
-func NewServletCache(srcdir, builddir, gopath string) *ServletCache {
+func NewServletCache(srcdir, builddir string) *ServletCache {
   return &ServletCache{
     srcdir:   srcdir,
     builddir: builddir,
-    gopath:   gopath,
     items:    make(map[string]*Servlet),
   }
 }
@@ -149,7 +145,6 @@ func (c *ServletCache) Build(name string, prevs *Servlet) (*Servlet, error) {
 
   // Create new servlet
   s := NewServlet(c.servletDir(name), name)
-  s.version = time.Now().UnixNano()
 
   // Build
   if prevs == nil {  // no previous servlet instance
@@ -176,7 +171,7 @@ func (c *ServletCache) Build(name string, prevs *Servlet) (*Servlet, error) {
   // Cleanup any replaced servlet
   if prevs != nil {
     go func() {
-      os.Remove(c.servletLibFile(prevs.name, prevs.version))
+      os.Remove(prevs.libfile)
       if prevs.stopFun != nil {
         prevs.stopFun(prevs.ctx)
       }
@@ -236,8 +231,8 @@ func (c *ServletCache) findServletLibFile(servletName string) string {
 }
 
 
-func (c *ServletCache) rmServletLibFile(servletName string, version int64) {
-}
+// func (c *ServletCache) rmServletLibFile(servletName string, version int64) {
+// }
 
 
 func (c *ServletCache) servletDir(servletName string) string {
@@ -257,12 +252,13 @@ func parseLibFileVersion(libfile string) int64 {
 
 
 func (c *ServletCache) buildAndLoadServletInit(s *Servlet) {
-  libfile := c.findServletLibFile(s.name)
   libOK := false
+  s.libfile = c.findServletLibFile(s.name)
+  s.version = time.Now().UnixNano()
 
   // check if we have a valid library file
-  if len(libfile) > 0 {
-    libstat, err := os.Stat(libfile)
+  if len(s.libfile) > 0 {
+    libstat, err := os.Stat(s.libfile)
     libOK = err == nil
     if libOK {
       if s.srcGraph != nil && libstat.ModTime().UnixNano() < s.srcGraph.mtime {
@@ -271,7 +267,7 @@ func (c *ServletCache) buildAndLoadServletInit(s *Servlet) {
         libOK = false
       } else {
         // set s.version from libfile
-        s.version = parseLibFileVersion(libfile)
+        s.version = parseLibFileVersion(s.libfile)
       }
     }
   }
@@ -279,15 +275,15 @@ func (c *ServletCache) buildAndLoadServletInit(s *Servlet) {
   // build if needed
   for {
     if !libOK {
-      libfile = c.servletLibFile(s.name, s.version)
-      if err := c.buildServlet(s, libfile); err != nil {
+      s.libfile = c.servletLibFile(s.name, s.version)
+      if err := s.Build(); err != nil {
         s.builderr = err
         return
       }
     }
 
     // load servlet
-    if err := c.loadServlet(s, libfile); err != nil {
+    if err := s.Load(); err != nil {
       if libOK {
         // We tried loading an existing servlet, but it failed.
         // This could happen if the servlet was built with a now-outdated
@@ -308,60 +304,18 @@ func (c *ServletCache) buildAndLoadServletInit(s *Servlet) {
 
 
 func (c *ServletCache) buildAndLoadServlet(s *Servlet) {
-  libfile := c.servletLibFile(s.name, s.version)
+  s.version = time.Now().UnixNano()
+  s.libfile = c.servletLibFile(s.name, s.version)
 
-  if err := c.buildServlet(s, libfile); err != nil {
+  if err := s.Build(); err != nil {
     s.builderr = err
     return
   }
 
-  if err := c.loadServlet(s, libfile); err != nil {
+  if err := s.Load(); err != nil {
     s.builderr = err
   }
 }
 
 
 
-
-
-func (c *ServletCache) loadServlet(s *Servlet, libfile string) error {
-  logf("loading servlet %q from %q", s.name, libfile)
-
-  o, err := plugin.Open(libfile)
-  if err != nil {
-    logf("plugin.Open failed: %v", err)
-    return err
-  }
-
-  // ServeHTTP
-  sym, err := o.Lookup("ServeHTTP")
-  if err != nil {
-    return errorf("missing ServeHTTP function")
-  }
-  if fn, ok := sym.(ghp.ServeHTTP); ok {
-    s.serveHTTP = fn
-  } else {
-    return errorf("incorrect signature of ServeHTTP function")
-  }
-
-  // StopServlet (optional)
-  if sym, err := o.Lookup("StopServlet"); err == nil {
-    if fn, ok := sym.(ghp.StopServlet); ok {
-      s.stopFun = fn
-    } else {
-      return errorf("incorrect signature of StopServlet function")
-    }
-  }
-
-  // StartServlet (optional)
-  if sym, err := o.Lookup("StartServlet"); err == nil {
-    if fn, ok := sym.(ghp.StartServlet); ok {
-      logf("[servlet %s] call StartServlet", s)
-      fn(s.ctx)
-    } else {
-      return errorf("incorrect signature of StartServlet function")
-    }
-  }
-
-  return nil
-}

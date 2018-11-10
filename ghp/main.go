@@ -53,12 +53,13 @@ func main() {
     panic(err)
   }
 
-  // patch config.Gopath to include ghp's gopath
+  // patch config.Go.Gopath to include ghp's gopath
   ghpGopath := pjoin(ghpdir, "gopath")
-  if len(config.Gopath) > 0 {
-    config.Gopath = ghpGopath + string(filepath.ListSeparator) + config.Gopath
+  if len(config.Go.Gopath) > 0 {
+    sep := string(filepath.ListSeparator)
+    config.Go.Gopath = ghpGopath + sep + config.Go.Gopath
   } else {
-    config.Gopath = ghpGopath
+    config.Go.Gopath = ghpGopath
   }
 
   // in dev mode, print configuration
@@ -71,12 +72,25 @@ func main() {
   // initialize appBuildDir which is unique per go config and pubdir
   initAppBuildDir()
 
-  // init servlet cache
-  servletCache = NewServletCache(config.PubDir, appBuildDir, config.Gopath)
-  if config.Servlet.Preload {
-    err := servletCache.LoadAll()
-    if err != nil {
+  // init servlet system
+  if config.Servlet.Enabled {
+    // make sure the go tool is available
+    if err := InitGoTool(); err != nil {
       panic(err)
+    }
+
+    // If we are not recycling servlet libs, trash any old ones.
+    if !config.Servlet.Recycle {
+      os.RemoveAll(appBuildDir)
+    }
+
+    // setup a servlet cache
+    servletCache = NewServletCache(config.PubDir, appBuildDir)
+    if config.Servlet.Preload {
+      err := servletCache.LoadAll()
+      if err != nil {
+        panic(err)
+      }
     }
   }
 
@@ -123,8 +137,8 @@ func initAppBuildDir() {
     ".%s-%s-%s-%s",
     runtime.Version(),
     runtime.Compiler,
-    runtime.GOARCH,
     runtime.GOOS,
+    runtime.GOARCH,
   )
 
   // appBuildDir

@@ -5,8 +5,6 @@ import (
   "io"
   "io/ioutil"
   "os"
-  "path/filepath"
-  "strings"
   "sync"
   "gopkg.in/yaml.v2"
 )
@@ -16,10 +14,21 @@ type HttpServerConfig struct {
   Port    uint
 }
 
+type ServletConfig struct {
+  Enabled   bool
+  Preload   bool
+  HotReload bool `yaml:"hot-reload"`
+  Recycle   bool
+}
+
+type GoConfig struct {
+  Autofetch bool
+  Gopath    string  // in addition to ghpdir/gopath
+}
+
 type Config struct {
-  Gopath   string
-  BuildDir string `yaml:"build-dir"`
-  PubDir   string `yaml:"pub-dir"`
+  BuildDir string   `yaml:"build-dir"`
+  PubDir   string   `yaml:"pub-dir"`
 
   HttpServer []*HttpServerConfig `yaml:"http-server"`
 
@@ -28,10 +37,9 @@ type Config struct {
     Template string
   } `yaml:"dir-list"`
 
-  Servlet struct {
-    Preload   bool
-    HotReload bool `yaml:"hot-reload"`
-  }
+  Servlet ServletConfig
+
+  Go GoConfig
 
   // ---- internal ----
   goProcEnv []string
@@ -70,28 +78,6 @@ func (c *Config) writeYaml(w io.Writer) error {
 //   return err
 // }
 
-
-func (c *Config) getGoProcEnv() []string {
-  c.goProcEnvOnce.Do(func() {
-    var env []string
-    // configure env
-    // TODO: only do this once (can use sync.Once)
-    gopathPrefix := "GOPATH="
-    for _, ent := range os.Environ() {
-      if strings.HasPrefix(ent, gopathPrefix) {
-        // prepend our explicit gopath to GOPATH
-        GOPATH := ent[len(gopathPrefix):]
-        ent = gopathPrefix + config.Gopath
-        if len(GOPATH) > 0 {
-          ent += string(filepath.ListSeparator) + GOPATH
-        }
-      }
-      env = append(env, ent)
-    }
-    c.goProcEnv = env
-  })
-  return c.goProcEnv
-}
 
 
 func openUserConfigFile() (*os.File, error) {
@@ -155,10 +141,10 @@ func loadConfig(explicitFile string) (*Config, error) {
   }
 
   // Canonicalize paths (preserves symlinks)
-  c.Gopath = abspath(c.Gopath)
   c.PubDir = abspath(c.PubDir)
   c.BuildDir = abspath(c.BuildDir)
   c.DirList.Template = abspath(c.DirList.Template)
+  c.Go.Gopath = abspathList(c.Go.Gopath)
 
   return c, nil
 }

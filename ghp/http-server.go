@@ -296,7 +296,7 @@ func (s *HttpServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
     }
 
     for _, name := range names {
-      if name == "servlet.go" {
+      if config.Servlet.Enabled && name == "servlet.go" {
         // directory contains an "servlet.go" file -- treat it as a servlet
         serveServlet(fspath, d, w, r)
         return

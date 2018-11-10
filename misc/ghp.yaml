@@ -15,6 +15,8 @@ dir-list:
   template: ${ghpdir}/misc/dirlist.html
 
 servlet:
+  enabled: true
+
   # build outdated servlets when server starts rather than on-demand.
   # This makes startup a little slower, but will crash the server right away
   # if any servlet is broken.
@@ -22,7 +24,26 @@ servlet:
 
   # Rebuild & reload servlets live as their source code changes.
   # Not recommended for production.
+  # Note that this does not disable building of servlets in general.
   hot-reload: false
 
-# Custom gopath used for servlets and page helpers
-# gopath: "./my-gopath"
+  # Recycle prebuilt servlets.
+  # Setting this to false causes servlets to be rebuilt after ghp is restarted.
+  recycle: true
+
+go:
+  # autofetch enables automatic fetching of go binaries from
+  # https://dl.google.com/go/ when it cannot be found for the platform.
+  # This is useful for when ghp is deployed on a different system than
+  # where it was built. The version fetched will match the version of go
+  # which was used to build ghp.
+  autofetch: true
+
+  # Custom GOPATH used for servlets and page helpers
+  gopath: "./my-gopath"
+
+# gobin is a file directory path in where to find the go binaries,
+# used to build servlets.
+# If this is empty or not provided, go will be looked up in the
+# environment (i.e. PATH).
+# gobin: "./special-go-version"

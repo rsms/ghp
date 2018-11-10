@@ -71,9 +71,8 @@ Hello world
 ## Usage
 
 ```sh
-./init.sh  # just needed first time
 ./build.sh
-(cd example && ../build/ghp)
+(cd example && ../bin/ghp -dev)
 ```
 
 Open `http://localhost:8001/example/`
@@ -81,9 +80,9 @@ Open `http://localhost:8001/example/`
 Edit go files in `example/pub` and reload your web browser.
 
 
-### Dev setup:
+### Dev setup
 
 - Terminal 1: `autorun -r=500 ghp/*.go -- ./build.sh`
-- Terminal 2: `cd example && autorun ../build/ghp -- ../build/ghp`
+- Terminal 2: `(cd example && autorun ../bin/ghp -- ../bin/ghp -dev)`
 
 Get [autorun here](https://github.com/rsms/autorun)

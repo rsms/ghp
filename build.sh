@@ -1,51 +1,157 @@
 #!/bin/bash
 set -e
 cd "$(dirname "$0")"
-source init.sh
+SRCDIR_REL=$(dirname "${BASH_SOURCE[0]}")
 
-if [[ "$1" == "-h" || "$1" == "-help" || "$1" == "--help" ]]; then
-  # echo "usage: $0 [-debug] [<go-build-option> ...]" >&2
-  echo "usage: $0 [-run] [<go-build-option> ...]" >&2
-  echo "usage: $0 -h|-help" >&2
+OPT_HELP=false
+OPT_NOGET=false
+OPT_GOUPDATE=false
+
+# parse args
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+  -h|-help|--help)
+    OPT_HELP=true
+    shift
+    ;;
+  -noget)
+    OPT_NOGET=true
+    shift
+    ;;
+  -update-go)
+    OPT_GOUPDATE=true
+    shift
+    ;;
+  *)
+    echo "$0: Unknown option $1" >&2
+    OPT_HELP=true
+    shift
+    ;;
+  esac
+done
+if $OPT_HELP; then
+  echo "usage: $0 [options]" >&2
+  echo "options:" >&2
+  echo "  -h, -help    Show help" >&2
+  echo "  -noget       Do NOT fetch or update dependencies" >&2
+  echo "  -update-go   Fetch and install go (even if it's already up to date)" >&2
   exit 1
 fi
 
-run=false
-if [[ "$1" == "-run" ]]; then
-  run=true
-  shift
-fi
 
-# DEBUG=false
-# DEBUG_STR="false"
-# if [[ "$1" == "-debug" ]]; then
-#   shift
-#   DEBUG=true
-#   DEBUG_STR="true"
-# fi
+# parameters & environment
+pushd "$SRCDIR_REL" >/dev/null
+SRCDIR=$(pwd)
+popd >/dev/null
 
 GITREV=$(git rev-parse --short=10 HEAD)
 VERSION=$(cat version.txt)
 
-# ghp
+if [[ -z $GHP_GO_VERSION ]]; then
+  export GHP_GO_VERSION=1.11.2
+fi
+
+export GOROOT=$SRCDIR/go
+export GOPATH=$SRCDIR/gopath
+export PATH=$GOROOT/bin:$PATH
+
+
+# needs go?
+if ! $OPT_GOUPDATE; then
+  if [[ ! -d "$GOROOT" ]] || [[ ! -f "$GOROOT/VERSION" ]]; then
+    echo "$GOROOT is missing" >&2
+    OPT_GOUPDATE=true
+  elif [[ "$(cat $GOROOT/VERSION)" != "go$GHP_GO_VERSION" ]]; then
+    echo "$GOROOT is out of date (has $(cat $GOROOT/VERSION); wants go$GHP_GO_VERSION)" >&2
+    OPT_GOUPDATE=true
+  fi
+fi
+
+if $OPT_GOUPDATE; then
+  if $OPT_NOGET; then
+    echo "$0: -noget is specified but conflicts with updating go." >&2
+    echo "Run $0 again without the -noget flag, or install go $GHP_GO_VERSION manually into $PWD/go" >&2
+    exit 1
+  fi
+  FROMSOURCE=false
+  if [[ -z $GOOS ]] || [[ "$GOOS" == "" ]] || [[ -z $GOARCH ]] || [[ "$GOARCH" == "" ]]; then
+    shopt -s nocasematch
+    case $(uname) in
+    # see https://github.com/golang/go/blob/master/src/go/build/syslist.go
+    *darwin*)
+      export $GOOS=darwin
+      export GOARCH=amd64  # note: go only supports amd64 on mac
+      ;;
+    *)
+      echo "Unable to infer system. Fetching and building go from source."
+      FROMSOURCE=true
+      ;;
+    esac
+  fi
+
+  GOAR_URL=https://dl.google.com/go/go$GHP_GO_VERSION.$GOOS-$GOARCH.tar.gz
+  if $FROMSOURCE; then
+    GOAR_URL=https://dl.google.com/go/go$GHP_GO_VERSION.src.tar.gz
+  fi
+
+  # temporary directory
+  rm -rf .go-tmp
+  mkdir .go-tmp
+  pushd .go-tmp >/dev/null
+
+  echo "Fetching $GOAR_URL -> $PWD"
+  curl '-#' -o go.tar.gz "$GOAR_URL"
+  tar -xzf go.tar.gz
+  rm go.tar.gz
+
+  if $FROMSOURCE; then
+    echo "Building go at $PWD/go"
+    pushd go/src >/dev/null
+    bash all.bash
+    popd >/dev/null
+  fi
+
+  # test
+  cat << 'EOF' > test.go
+package main
+import "fmt"
+func main() {
+  fmt.Printf("test ok\n")
+}
+EOF
+  GOROOT=$PWD/go PATH=$PWD/go/bin:$PATH go build -o test
+  ./test
+
+  # clean up go directory
+  pushd go/src >/dev/null
+  rm -rf test misc doc api favicon.ico
+  popd >/dev/null
+
+  # replace ghp/go
+  rm -rf ../go
+  mv go ../go
+
+  # exit temp dir and remove it
+  popd >/dev/null
+  rm -rf .go-tmp
+fi
+
+
 pushd ghp >/dev/null
-echo "build ghp"
+
+
+if ! $OPT_NOGET; then
+  echo "go get ."
+  go get -d -v .
+fi
+
+
+echo "go build bin/ghp"
 go build \
   -buildmode=exe \
   -ldflags="-X main.ghpVersion=$VERSION -X main.ghpVersionGit=$GITREV" \
   -pkgdir "$SRCDIR/gopath" \
-  -o $SRCDIR/build/ghp \
-  "$@"
+  -o $SRCDIR/bin/ghp
+
+
 popd >/dev/null
-
-# pushd pub/example >/dev/null
-# echo "build pub/example"
-# go build \
-#   -buildmode=plugin \
-#   -o $SRCDIR/build/plugins/example.so
-# popd >/dev/null
-
-if $run; then
-  echo ./build/ghp
-  ./build/ghp
-fi

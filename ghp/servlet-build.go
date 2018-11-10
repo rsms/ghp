@@ -1,62 +1,42 @@
 package main
 
 import (
-  "bytes"
-  "strings"
-  "os"
-  "os/exec"
-  "path/filepath"
   "fmt"
 )
 
-type GoBuildError struct {
-  Message string
-  Details string
-}
 
-func (e *GoBuildError) Error() string {
-  return e.Message
-}
+func (s *Servlet) Build() error {
+  logf("[servlet] building %s -> %q", s, s.libfile)
 
+  g := NewGoTool(
+    "build",
+    "-buildmode=plugin",
+    // "-gcflags", "-p " + libfile,
+    "-ldflags", "-pluginpath=" + s.libfile,  // needed for uniqueness
+    "-o", s.libfile,
+  )
 
-func makeGoBuildError(msg, abssrcdir, stderr string) *GoBuildError {
-  srcdir := pubfilename(abssrcdir)
+  logf("go tool: %+v", g)
 
-  var lines []string
+  // set working directory to servlet's source directory
+  g.Cmd.Dir = s.dir
 
-  /* Example output on stderr:
-  # _/Users/rsms/src/ghp/example/pub/servlet
-  ./servlet.go:24:51: syntax error: unexpected newline, expecting comma or )
-  */
-
-  for _, line := range strings.Split(strings.TrimSpace(stderr), "\n") {
-    line = strings.TrimSpace(line)
-    if len(line) == 0 {
-      continue
-    }
-    if line[0] == '#' {
-      continue
-    }
-
-    if strings.HasPrefix(line, "./") || strings.HasPrefix(line, "../") {
-      p := strings.IndexByte(line, ':')
-      if p != -1 {
-        filename := filepath.Join(srcdir, line[0:p])
-        line = filename + line[p:]
-      }
-    }
-
-    lines = append(lines, line)
+  // run go build
+  _, stderr, err := g.RunBufferedIO()
+  if err != nil {
+    logf("[servlet] go build failed: %s\n%s", err.Error(), stderr.String())
+    return makeGoBuildError(
+      fmt.Sprintf("failed to build servlet %q", s.name),
+      s.dir,
+      stderr.String(),
+    )
   }
 
-  return &GoBuildError{
-    Message: msg,
-    Details: strings.Join(lines, "\n"),
-  }
+  return nil
 }
 
 
-func (c *ServletCache) buildServlet(s *Servlet, libfile string) error {
+/*func (c *ServletCache) buildServlet(s *Servlet, libfile string) error {
   srcdir := c.servletDir(s.name)
   // libfile := c.servletLibFile(s.name, s.version)
   // builddir := pjoin(c.builddir, s.name)
@@ -107,12 +87,12 @@ func (c *ServletCache) buildServlet(s *Servlet, libfile string) error {
   //   logf("stderr: %q\n", errbuf.String())
   // }
 
-  // set s.version to lib file mtime
-  libstat, err := os.Stat(libfile)
-  if err != nil {
-    return err
-  }
-  s.version = libstat.ModTime().UnixNano()
+  // // set s.version to lib file mtime
+  // libstat, err := os.Stat(libfile)
+  // if err != nil {
+  //   return err
+  // }
+  // s.version = libstat.ModTime().UnixNano()
 
   return nil
-}
+}*/

@@ -2,10 +2,12 @@ package main
 
 import (
   "fmt"
+  "io"
   "log"
   "os"
   "path"
   "path/filepath"
+  "strings"
   "time"
 )
 
@@ -28,6 +30,27 @@ func assert(cond bool, info... interface{}) {
     }
     panic(msg)
   }
+}
+
+func copyfile(srcname, dstname string) (int64, error) {
+  src, err := os.Open(srcname)
+  if err != nil {
+    return 0, err
+  }
+  defer src.Close()
+
+  st, err := src.Stat()
+  if err != nil {
+    return 0, err
+  }
+
+  dst, err := os.OpenFile(dstname, os.O_RDWR|os.O_CREATE, st.Mode())
+  if err != nil {
+    return 0, err
+  }
+  defer dst.Close()
+
+  return io.Copy(dst, src)
 }
 
 // pubfilename returns a publicly-presentable filename.
@@ -67,6 +90,18 @@ func abspath(name string) string {
     panic(err)
   }
   return name2
+}
+
+func abspathList(names string) string {
+  if strings.IndexByte(names, os.PathListSeparator) != -1 {
+    var v []string
+    pathSep := string(os.PathListSeparator)
+    for _, name := range strings.Split(names, pathSep) {
+      v = append(v, abspath(name))
+    }
+    return strings.Join(v, pathSep)
+  }
+  return abspath(names)
 }
 
 // countByte returns the number of occurances of b in s

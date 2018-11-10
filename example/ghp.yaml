@@ -10,6 +10,7 @@ dir-list:
 
 # hot-reload servlets live as their source code changes
 servlet:
+  recycle: false
   hot-reload: true
 
 # listen on both ipv4 and ipv6 loopback addresses
