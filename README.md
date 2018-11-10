@@ -82,7 +82,9 @@ Edit go files in `example/pub` and reload your web browser.
 
 ### Dev setup
 
-- Terminal 1: `autorun -r=500 ghp/*.go -- ./build.sh`
+- Terminal 1: `autorun -r=500 ghp/*.go -- ./build.sh -noget`
 - Terminal 2: `(cd example && autorun ../bin/ghp -- ../bin/ghp -dev)`
+
+Now just edit source files and GHP will be automatically rebuilt and restarted.
 
 Get [autorun here](https://github.com/rsms/autorun)
