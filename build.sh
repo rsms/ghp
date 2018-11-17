@@ -82,6 +82,19 @@ if $OPT_GOUPDATE; then
       export $GOOS=darwin
       export GOARCH=amd64  # note: go only supports amd64 on mac
       ;;
+    *linux*)
+      # Linux ip-10-0-0-181 4.15.0 #21-Ubuntu x86_64 x86_64 x86_64 GNU/Linux
+      export $GOOS=linux
+      case $(uname -i) in
+        *x86_64*)
+          export GOARCH=amd64
+          ;;
+        *i386*)
+          export GOARCH=386
+          ;;
+        *)
+      esac
+      ;;
     *)
       echo "Unable to infer system. Fetching and building go from source."
       FROMSOURCE=true
@@ -89,8 +102,13 @@ if $OPT_GOUPDATE; then
     esac
   fi
 
+  # Fetch binary build, e.g.
+  # https://dl.google.com/go/go1.11.2.linux-amd64.tar.gz
+  # https://dl.google.com/go/go1.11.2.linux-386.tar.gz
+  #
   GOAR_URL=https://dl.google.com/go/go$GHP_GO_VERSION.$GOOS-$GOARCH.tar.gz
   if $FROMSOURCE; then
+    # Oh well, fetch source dist and we'll compile it
     GOAR_URL=https://dl.google.com/go/go$GHP_GO_VERSION.src.tar.gz
   fi
 
