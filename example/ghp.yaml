@@ -1,21 +1,26 @@
-# app configuration
-# we can override any variables defined by ghp/misc/ghp.yaml
-
 # set public directory
-pub-dir:  pub
+pub-dir: pub
 
-# Enable automatic directory listing
-dir-list:
-  enabled: true
+# accept both HTTP/1.1 and HTTPS/2 connections
+servers:
+  - &s1
+    address: localhost
+    port: 8002
+    dirlist:
+      enabled: true
+
+  - <<: *s1
+    type: https
+    port: 8443
+    tls-cert-file: tls/localhost.cert
+    tls-key-file:  tls/localhost.key
+
+zdr:
+  group: my-host-unique-id
 
 # hot-reload servlets live as their source code changes
 servlet:
-  recycle: false
+  recycle: true
   hot-reload: true
 
-# listen on both ipv4 and ipv6 loopback addresses
-http-server:
-  - address: 127.0.0.1
-    port: 8001
-  - address: localhost
-    port: 8002
+# see <ghp>/misc/ghp.yaml for available properties

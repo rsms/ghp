@@ -49,7 +49,7 @@ func (g *GoTool) RunBufferedIO() (stdout bytes.Buffer, stderr bytes.Buffer, err 
 // InitGoTool initializes the go tool.
 // Config must be loaded when this function is called.
 //
-func InitGoTool() error {
+func InitGoTool(c *GoConfig) error {
   goToolGoroot = pjoin(ghpdir, "go")
   goToolFilename = pjoin(goToolGoroot, "bin", "go")
   
@@ -59,26 +59,10 @@ func InitGoTool() error {
   st, err := os.Stat(goToolFilename)
   if err != nil {
     if !os.IsNotExist(err) {
-      return errorf(
-        "go tool is unreadable (%s). Check %q",
-        err.Error(),
-        goToolFilename,
-      )
+      return errorf("go tool %q unreadable: %s", goToolFilename, err.Error())
     }
 
-    return errorf(
-      "go not found at %q. Get it from https://dl.google.com/go/%s.tar.gz",
-      goToolGoroot,
-      runtimeVersion,
-    )
-
-    // TODO: copy from system if available
-    //
-    // // Stat again
-    // st, err = os.Stat(goToolFilename)
-    // if err != nil {
-    //   return err
-    // }
+    return errorf("go not found at %q", goToolGoroot, runtimeVersion)
   }
 
   // make sure it's an executable file
@@ -112,7 +96,7 @@ func InitGoTool() error {
     )
   }
 
-  initGoToolEnv()
+  initGoToolEnv(c)
 
   if devMode {
     logf("using go tool %q", goToolFilename)
@@ -164,7 +148,7 @@ func parseEnvEntries(entries []string) map[string]string {
 }
 
 
-func initGoToolEnv() {
+func initGoToolEnv(c *GoConfig) {
   listSep := string(filepath.ListSeparator)
 
   // parse os.Environ into map
@@ -172,12 +156,13 @@ func initGoToolEnv() {
 
   // extend or add GOPATH
   if gopath, ok := env["GOPATH"]; ok {
-    env["GOPATH"] = config.Go.Gopath + listSep + gopath
+    env["GOPATH"] = c.Gopath + listSep + gopath
   } else {
-    env["GOPATH"] = config.Go.Gopath
+    env["GOPATH"] = c.Gopath
   }
 
   env["GOROOT"] = goToolGoroot
+  // env["CGO_ENABLED"] = "0"
 
   // encode as K=V
   goToolEnv = []string{}

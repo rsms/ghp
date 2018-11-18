@@ -2,51 +2,133 @@ package main
 
 import (
   "fmt"
+  "ghp"
   "html"
   "io"
   "net/http"
   "os"
+  "path"
   "path/filepath"
   "runtime/debug"
   "strconv"
   "time"
-  "path"
-  "ghp"
+  "context"
+
+  "golang.org/x/crypto/acme/autocert"
 )
 
 
-var servletCache *ServletCache
-
-type HttpServer struct {
-  c *HttpServerConfig
-  s *http.Server
+type HttpResponse struct {
+  http.ResponseWriter
 }
 
-func NewHttpServer(c *HttpServerConfig) *HttpServer {
-  s := &HttpServer{
-    c: c,
-    s: &http.Server{
-      Addr:           fmt.Sprintf("%s:%d", c.Address, c.Port),
-      ReadTimeout:    10 * time.Second,
-      WriteTimeout:   10 * time.Second,
-      MaxHeaderBytes: 1 << 20,
-    },
+
+// setLastModified sets Last-Modified header if modtime != 0
+//
+func (w *HttpResponse) setLastModified(modtime time.Time) {
+  if !isZeroTime(modtime) {
+    w.Header().Set("Last-Modified", modtime.UTC().Format(http.TimeFormat))
   }
-  s.s.Handler = s
+}
+
+// --------------------------------------------------
+
+type HttpServer struct {
+  g       *Ghp
+  s       *http.Server
+  c       *ServerConfig
+  dirlist *HtmlDirLister
+  pageIndexName string
+}
+
+
+func NewHttpServer(g *Ghp, c *ServerConfig) *HttpServer {
+  s := &HttpServer{
+    g: g,
+    c: c,
+  }
+
+  if g.pageCache != nil {
+    s.pageIndexName = "index" + g.pageCache.fileext
+  }
+
+  if c.Port == 0 {
+    if s.c.Type == "https" {
+      c.Port = 443
+    } else {
+      c.Port = 80
+    }
+  }
+
+  s.s = &http.Server{
+    Addr:           fmt.Sprintf("%s:%d", c.Address, c.Port),
+    ReadTimeout:    10 * time.Second,
+    WriteTimeout:   10 * time.Second,
+    MaxHeaderBytes: 1 << 20,
+    ErrorLog:       logger,
+    Handler:        s,
+  }
+
   // s.s.RegisterOnShutdown(s.onShutdown)
+
   return s
 }
 
 
-// func (s *HttpServer) onShutdown() {
-//   // This can be used to gracefully shutdown connections that have undergone
-//   // NPN/ALPN protocol upgrade or that have been hijacked.
-//   // This function should start protocol-specific graceful shutdown, but
-//   // should not wait for shutdown to complete.
-// }
-
-
 func (s *HttpServer) ListenAndServe() error {
+  var err error
+
+  // initialize directory lister
+  if s.c.DirList.Enabled {
+    s.dirlist, err = NewHtmlDirLister(s.g.config.PubDir, &s.c.DirList)
+    if err != nil {
+      return err
+    }
+  } else {
+    s.dirlist = nil
+  }
+
+  if s.c.Type == "https" {
+    return s.listenAndServeHttps()
+  } else {
+    return s.listenAndServeHttp()
+  }
+}
+
+
+func (s *HttpServer) listenAndServeHttps() error {
+  var certFile, keyFile string
+  if s.c.Autocert != nil {
+    if err := s.configureAutocert(); err != nil {
+      return err
+    }
+  } else {
+    // use certificate files
+    certFile = abspath(s.c.TlsCertFile)
+    keyFile = abspath(s.c.TlsKeyFile)
+    if err := checkIsFile(certFile); err != nil {
+      return err
+    }
+    if err := checkIsFile(keyFile); err != nil {
+      return err
+    }
+  }
+  logf("listening on https://%s", s.s.Addr)
+  return s.s.ListenAndServeTLS(certFile, keyFile)
+}
+
+
+func (s *HttpServer) listenAndServeHttp() error {
+  // log warnings when TLS properties are specified but type is not https
+  if s.c.TlsCertFile != "" {
+    logf("warning: server config with unused tls-cert-file (not https)")
+  }
+  if s.c.TlsKeyFile != "" {
+    logf("warning: server config with unused tls-key-file (not https)")
+  }
+  if s.c.Autocert != nil {
+    logf("warning: server config with unused autocert config (not https)")
+  }
   logf("listening on http://%s", s.s.Addr)
   return s.s.ListenAndServe()
 }
@@ -57,10 +139,235 @@ func (s *HttpServer) Close() error {
 }
 
 
+func (s *HttpServer) Shutdown(ctx context.Context) error {
+  return s.s.Shutdown(ctx)
+}
+
+
+// func (s *HttpServer) onShutdown() {
+//   logf("HttpServer.onShutdown")
+//   // This can be used to gracefully shutdown connections that have undergone
+//   // NPN/ALPN protocol upgrade or that have been hijacked.
+//   // This function should start protocol-specific graceful shutdown, but
+//   // should not wait for shutdown to complete.
+// }
+
+
+func (s *HttpServer) configureAutocert() error {
+  if len(s.c.Autocert.Hosts) == 0 {
+    return errorf("autocert.hosts is empty in server config")
+  }
+  if s.c.TlsCertFile != "" {
+    return errorf("both autocert and tls-cert-file in server config")
+  }
+  if s.c.TlsKeyFile != "" {
+    return errorf("both autocert and tls-key-file in server config")
+  }
+
+  autocertCacheDir := pjoin(s.g.appCacheDir, "autocert")
+  if err := os.MkdirAll(autocertCacheDir, 0700); err != nil {
+    return err
+  }
+
+  m := autocert.Manager{
+    Cache: autocert.DirCache(autocertCacheDir),
+    Prompt: autocert.AcceptTOS,
+    HostPolicy: autocert.HostWhitelist(s.c.Autocert.Hosts...),
+    Email: s.c.Autocert.Email,
+  }
+
+  s.s.TLSConfig = m.TLSConfig()
+
+  return nil
+}
+
+
+func (s *HttpServer) ServeHTTP(w_ http.ResponseWriter, r *http.Request) {
+  w := &HttpResponse{w_}
+
+  // handle panics and use as reply in development mode
+  if devMode {
+    defer func() {
+      if r := recover(); r != nil {
+        logf("panic in serve(): %v", r)
+        debug.PrintStack()
+        s.replyError(w, errorf("%v", r))
+      }
+    }()
+  }
+
+  // TODO: break out into
+  // func (s *HttpServer) serve(w *HttpResponse, r *http.Request) error
+  // and wrap in ServeHTTP to simplify replyError
+
+  // log request
+  logf("%s %s (%s, %s, %s)",
+    r.Method,
+    r.URL.RequestURI(),
+    r.Proto,
+    r.Host,
+    r.RemoteAddr)
+
+  // join request path together with pubdir
+  // note that URL.Path never contains ".."
+  fspath := filepath.Join(s.g.config.PubDir, r.URL.Path)
+
+  // attempt to open requested file
+  file, err := os.Open(fspath)
+  if err != nil {
+    // we can't read the file. Why doesn't really matter. Send 404
+    s.replyNotFound(w)
+    return
+  }
+  defer file.Close()
+
+  // read file stats
+  d, err := file.Stat()
+  if err != nil {
+    s.replyError(w, err)
+    return
+  }
+
+  if d.IsDir() {
+    // TODO: consider using filepath.Walk instead
+
+    // directory -- look for an "index" file
+    names, err := file.Readdirnames(0)
+    if err != nil {
+      s.replyError(w, err)
+      return
+    }
+
+    for _, name := range names {
+      // Note: We need to test for page before index.html as the page
+      // file extension might be ".html"
+      if s.g.pageCache != nil && name == s.pageIndexName {
+        s.servePageFile(pjoin(fspath, name), w, r)
+        return
+      }
+      if name == "index.html" {
+        http.ServeFile(w, r, pjoin(fspath, name))
+        return
+      }
+      if s.g.servletCache != nil && name == "servlet.go" {
+        s.serveServlet(fspath, d, w, r)
+        return
+      }
+    }
+
+    // directory does not contain any index file
+    if s.dirlist != nil {
+      s.serveDirListing(file, d, w, r)
+    } else {
+      s.replyNotFound(w)
+    }
+
+  } else {
+    // file
+    ext := filepath.Ext(fspath)
+    if s.g.pageCache != nil && ext == s.g.pageCache.fileext {
+      s.servePage(file, d, w, r)
+    } else {
+      s.serveFile(file, d, w, r)
+    }
+  }
+}
+
+
+// serveServlet serves a request for a servlet.
+// A servlet is always a directory with a servlet.go file.
+//
+func (s *HttpServer) serveServlet(fspath string, d os.FileInfo, w *HttpResponse, r *http.Request) {
+  // redirect if requested path is not canonical
+  // TODO if we allow URL rerouting, this needs to be aware of it.
+  if s.canonicalizeDirPath(w, r, r.URL.Path) {
+    return
+  }
+
+  // get filename relative to pubdir
+  filename, err := filepath.Rel(s.g.config.PubDir, fspath)
+  if err != nil {
+    s.replyError(w, err)
+    return
+  }
+
+  servlet, err := s.g.servletCache.Get(filename)
+  if err != nil {
+    s.replyError(w, err)
+  } else if servlet.serveHTTP == nil {
+    s.replyError(w, "missing ServeHTTP in servlet")
+  } else {
+    req := &ghp.Request{Request: r}
+    res := NewServletResponse(w)
+    servlet.serveHTTP(req, res)
+  }
+}
+
+
+func (s *HttpServer) serveDirListing(f *os.File, d os.FileInfo, w *HttpResponse, r *http.Request) {
+  // redirect if requested path is not canonical
+  if s.canonicalizeDirPath(w, r, r.URL.Path) {
+    return
+  }
+
+  html, err := s.dirlist.RenderHtml(f.Name(), r.URL.Path)
+  if err != nil {
+    s.replyError(w, err)
+    return
+  }
+
+  w.Header().Set("Content-Type", "text/html; charset=utf-8")
+  w.Header().Set("Content-Length", strconv.Itoa(len(html)))
+  w.setLastModified(d.ModTime())
+  w.Write(html)
+}
+
+
+func (s *HttpServer) serveFile(f *os.File, d os.FileInfo, w *HttpResponse, r *http.Request) {
+  http.ServeContent(w, r, d.Name(), d.ModTime(), f)
+  // http.FileServer(http.Dir(pubdir))
+}
+
+
+func (s *HttpServer) servePage(f *os.File, d os.FileInfo, w *HttpResponse, r *http.Request) {
+  p, err := s.g.pageCache.Get(&buildCtx{}, f, d)
+  if err == nil {
+    err = p.Serve(w, r)
+  }
+  if err != nil {
+    s.replyError(w, err)
+  }
+}
+
+
+func (s *HttpServer) servePageFile(filename string, w *HttpResponse, r *http.Request) {
+  f, err := os.Open(filename)
+  if err != nil {
+    if os.IsNotExist(err) {
+      s.replyNotFound(w)
+    } else {
+      s.replyError(w, err)
+    }
+    return
+  }
+  defer f.Close()
+
+  d, err := f.Stat()
+  if err != nil {
+    s.replyError(w, err)
+    return
+  }
+
+  s.servePage(f, d, w, r)
+}
+
+
+
+
 const errBody404 = "<html><body><h1>404 not found</h1></body></html>\n"
 const errBody500 = "<html><body><h1>500 internal server error</h1></body></html>\n"
 
-func replyNotFound(w http.ResponseWriter) {
+func (s *HttpServer) replyNotFound(w *HttpResponse) {
   w.Header().Set("Content-Type", "text/html; charset=utf-8")
   w.Header().Set("Content-Length", strconv.Itoa(len(errBody404)))
   w.WriteHeader(http.StatusNotFound)
@@ -68,7 +375,7 @@ func replyNotFound(w http.ResponseWriter) {
 }
 
 
-func replyError(w http.ResponseWriter, message interface{}) {
+func (s *HttpServer) replyError(w *HttpResponse, message interface{}) {
   var msg, details string
 
   if err, ok := message.(error); ok {
@@ -105,7 +412,7 @@ func replyError(w http.ResponseWriter, message interface{}) {
 // localRedirect gives a Moved Permanently response.
 // It does not convert relative paths to absolute paths like Redirect does.
 //
-func localRedirect(w http.ResponseWriter, r *http.Request, newPath string) {
+func (s *HttpServer) replyLocalRedirect(w *HttpResponse, r *http.Request, newPath string) {
   if q := r.URL.RawQuery; q != "" {
     newPath += "?" + q
   }
@@ -113,218 +420,19 @@ func localRedirect(w http.ResponseWriter, r *http.Request, newPath string) {
   w.WriteHeader(http.StatusMovedPermanently)
 }
 
-// setLastModified sets Last-Modified header if modtime != 0
-//
-func setLastModified(w http.ResponseWriter, modtime time.Time) {
-  if !isZeroTime(modtime) {
-    w.Header().Set("Last-Modified", modtime.UTC().Format(http.TimeFormat))
-  }
-}
 
-// canonicalizeDirPath calls localRedirect and returns true if path does not
-// end in a slash and/or if path is not canoncial (e.g. contains "../")
+// canonicalizeDirPath calls replyLocalRedirect and returns true if path does
+// not end in a slash and/or if path is not canoncial (e.g. contains "../")
 //
-func canonicalizeDirPath(w http.ResponseWriter, r *http.Request, pathname string) bool {
+func (s *HttpServer) canonicalizeDirPath(w *HttpResponse, r *http.Request, pathname string) bool {
   cleanedPath := path.Clean(pathname)
   if cleanedPath != "/" {
     cleanedPath = cleanedPath + "/"
   }
   if pathname != cleanedPath {
     logf("redirect %q to canonical path %q", pathname, cleanedPath)
-    localRedirect(w, r, cleanedPath)
+    s.replyLocalRedirect(w, r, cleanedPath)
     return true
   }
   return false
-}
-
-
-// serveServlet serves a request for a servlet.
-// A servlet is always a directory with a servlet.go file.
-//
-func serveServlet(fspath string, d os.FileInfo, w http.ResponseWriter, r *http.Request) {
-  // redirect if requested path is not canonical
-  // TODO if we allow URL rerouting, this needs to be aware of it.
-  if canonicalizeDirPath(w, r, r.URL.Path) {
-    return
-  }
-
-  // get filename relative to pubdir
-  filename, err := filepath.Rel(config.PubDir, fspath)
-  if err != nil {
-    replyError(w, err)
-    return
-  }
-
-  s, err := servletCache.Get(filename)
-  if err != nil {
-    replyError(w, err)
-  } else if s.serveHTTP == nil {
-    replyError(w, "missing ServeHTTP")
-  } else {
-    req := &ghp.Request{Request: r}
-    res := &ServletResponse{w: w}
-    s.serveHTTP(req, res)
-  }
-}
-
-
-func serveDirListing(f *os.File, d os.FileInfo, w http.ResponseWriter, r *http.Request) {
-  // redirect if requested path is not canonical
-  if canonicalizeDirPath(w, r, r.URL.Path) {
-    return
-  }
-
-  html, err := dirlistHtml(f.Name(), r.URL.Path)
-  if err != nil {
-    replyError(w, err)
-    return
-  }
-
-  w.Header().Set("Content-Type", "text/html; charset=utf-8")
-  w.Header().Set("Content-Length", strconv.Itoa(len(html)))
-  setLastModified(w, d.ModTime())
-  w.Write(html)
-}
-
-
-func serveFile(f *os.File, d os.FileInfo, w http.ResponseWriter, r *http.Request) {
-  http.ServeContent(w, r, d.Name(), d.ModTime(), f)
-  // http.FileServer(http.Dir(pubdir))
-}
-
-
-func servePage(f *os.File, d os.FileInfo, w http.ResponseWriter, r *http.Request) {
-  p, err := pageCache.Get(&buildCtx{}, f, d)
-  
-  if err == nil {
-    err = p.Serve(w, r)
-  }
-  
-  if err != nil {
-    replyError(w, err)
-  }
-}
-
-
-func (s *HttpServer) withFile(
-  filename string,
-  w http.ResponseWriter,
-  fn func(f *os.File, d os.FileInfo)error,
-) bool {
-  f, err := os.Open(filename)
-  if err != nil {
-    if os.IsNotExist(err) {
-      replyNotFound(w)
-    } else {
-      replyError(w, err)
-    }
-    return false
-  }
-  defer f.Close()
-
-  // read file stats
-  d, err := f.Stat()
-  if err == nil {
-    err = fn(f, d)
-  }
-  if err != nil {
-    replyError(w, err)
-    return false
-  }
-  return true
-}
-
-
-func (s *HttpServer) servePageFile(filename string, w http.ResponseWriter, r *http.Request) {
-  s.withFile(filename, w, func (f *os.File, d os.FileInfo) error {
-    servePage(f, d, w, r)
-    return nil
-  })
-}
-
-
-func (s *HttpServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-  // handle panics and use as reply in development mode
-  if devMode {
-    defer func() {
-      if r := recover(); r != nil {
-        logf("panic in serve(): %v", r)
-        debug.PrintStack()
-        replyError(w, errorf("%v", r))
-      }
-    }()
-  }
-
-  // log request
-  logf("%s %s (%s, %s, %s)",
-    r.Method,
-    r.URL.RequestURI(),
-    r.Proto,
-    r.Host,
-    r.RemoteAddr)
-
-  // join request path together with pubdir
-  // note that URL.Path never contains ".."
-  fspath := filepath.Join(config.PubDir, r.URL.Path)
-
-  // attempt to open requested file
-  file, err := os.Open(fspath)
-  if err != nil {
-    // we can't read the file. Why doesn't really matter. Send 404
-    replyNotFound(w)
-    return
-  }
-  defer file.Close()
-
-  // read file stats
-  d, err := file.Stat()
-  if err != nil {
-    replyError(w, err)
-    return
-  }
-
-  if d.IsDir() {
-
-    // TODO: use filepath.Walk instead
-    // filepath.Walk(root, func(path string, d os.FileInfo, err error) error {}
-
-    // directory -- look for an "index" file
-    names, err := file.Readdirnames(0)
-    if err != nil {
-      replyError(w, err)
-      return
-    }
-
-    for _, name := range names {
-      if config.Servlet.Enabled && name == "servlet.go" {
-        // directory contains an "servlet.go" file -- treat it as a servlet
-        serveServlet(fspath, d, w, r)
-        return
-      }
-      if name == "index.html" {
-        http.ServeFile(w, r, pjoin(fspath, name))
-        return
-      }
-      if name == "index.ghp" {
-        s.servePageFile(pjoin(fspath, name), w, r)
-        return
-      }
-    }
-
-    // directory does not contain any index file
-    if config.DirList.Enabled {
-      serveDirListing(file, d, w, r)
-    } else {
-      replyNotFound(w)
-    }
-
-  } else {
-    // file
-    ext := filepath.Ext(fspath)
-    if ext == ".ghp" {
-      servePage(file, d, w, r)
-    } else {
-      serveFile(file, d, w, r)
-    }
-  }
 }

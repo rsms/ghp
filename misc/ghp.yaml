@@ -1,19 +1,62 @@
-# build products
-build-dir: ${ghpdir}/build
+# data and build products
+cache-dir: ${ghpdir}/cache
 
 # file directory being served
-pub-dir:  .
+pub-dir: pub
 
-# http servers
-http-server:
-  - address: 127.0.0.1
-    port: 8002
+# servers
+servers:
+  - address: 127.0.0.1  # defaults to "" (accept from anywhere)
+    port: 8002          # defaults to 80 for type http, 443 for https
+    type: http          # http or https. Defaults to http
+    dirlist:
+      # Enable listing of directories which are missing an index file.
+      enabled: false
 
-# directory listing
-dir-list:
-  enabled: false
-  template: ${ghpdir}/misc/dirlist.html
+      # By default <ghp>/misc/dirlist.html is used as a template for
+      # directory listings. "template" allows you to specify a custom
+      # template file. See <ghp>/misc/dirlist.html for usage.
+      # template: custom/dirlist.html
 
+
+# zdr enables Zero-Downtime Restarts by allowing two GHP processes to
+# coordinate shutdown and startup.
+#
+# When enabled, starting a GHP process that belongs to the same zdr group
+# as an already-running GHP process, will communicate with the existing
+# process to coordinate shudown of the existing process, and startup of
+# the new process.
+#
+# The following steps occur during such a restart:
+# 
+# 1. Existing process P1 listens on a shared resource like a unix socket,
+#    unique to the zdr group.
+# 2. A new process P2 is started and sends a message to P1 saying it's
+#    ready to take over.
+# 3. P1 stops accepting new requests and hands over "listen & accept"
+#    responsibility to P2, and begins graceful shutdown
+# 4. P2 starts listening for and accepting new connections & requests.
+# 5. P1 eventually exits when all ongoing requests are served to completion.
+#
+# By default the zdr group of a GHP process is automatically decided based
+# on pub-dir (or cache-dir, when customized.)
+# You can explicitly define the group by setting the "group" property.
+zdr:
+  enabled: true
+
+  # Explicit group identifier.
+  # Must only contain the following characters: 0-9A-Za-z_-.
+  # group: my-host-unique-id
+
+
+# Pages provides convenient go templating
+pages:
+  enabled: true
+  file-ext: ghp
+
+
+# servlets are just-in-time compiled embedded go programs that features
+# race-condition-free hot-reloading.
 servlet:
   enabled: true
 
@@ -30,6 +73,7 @@ servlet:
   # Recycle prebuilt servlets.
   # Setting this to false causes servlets to be rebuilt after ghp is restarted.
   recycle: true
+
 
 # go:
 #   # Custom GOPATH used for servlets and page helpers

@@ -10,6 +10,8 @@ import (
 )
 
 type ServletCache struct {
+  g        *Ghp
+  c        *ServletConfig
   srcdir   string  // where servlet sources are located
   builddir string  // where servlet .so files are stored
 
@@ -21,9 +23,11 @@ type ServletCache struct {
 }
 
 
-func NewServletCache(srcdir, builddir string) *ServletCache {
+func NewServletCache(g *Ghp, c *ServletConfig, builddir string) *ServletCache {
   return &ServletCache{
-    srcdir:   srcdir,
+    g: g,
+    c: c,
+    srcdir:   g.config.PubDir,
     builddir: builddir,
     items:    make(map[string]*Servlet),
   }
@@ -34,15 +38,15 @@ func (c *ServletCache) LoadAll() error {
   var wg sync.WaitGroup
   errch := make(chan error, 10)
 
-  // scan pubdir for servlets
-  err := FileScan(config.PubDir, func (dir string, names []string) error {
+  // scan srcdir for servlets
+  err := FileScan(c.srcdir, func (dir string, names []string) error {
     // look at directory entries
     for _, name := range names {
       if name == "servlet.go" {
         // it's a servlet
         wg.Add(1)
         go func() {
-          servletdir, err := filepath.Rel(config.PubDir, dir)
+          servletdir, err := filepath.Rel(c.srcdir, dir)
           if err != nil {
             maybeSendError(errch, err)
           } else if _, err := c.Get(servletdir); err != nil {
@@ -77,6 +81,26 @@ func (c *ServletCache) LoadAll() error {
   }
 
   return nil
+}
+
+
+// Servlets returns a slice of all current servlet instances
+//
+func (c *ServletCache) Servlets() []*Servlet {
+  c.itemsmu.RLock()
+  defer c.itemsmu.RUnlock()
+  v := make([]*Servlet, 0, len(c.items))
+  for _, s := range c.items {
+    v = append(v, s)
+  }
+  return v
+}
+
+
+func (c *ServletCache) Shutdown() error {
+  return fanApply(c.Servlets(), func(v interface{}) error {
+    return v.(*Servlet).Stop()
+  })
 }
 
 
@@ -144,11 +168,11 @@ func (c *ServletCache) Build(name string, prevs *Servlet) (*Servlet, error) {
   c.buildqmu.Unlock()  // done with buildq
 
   // Create new servlet
-  s := NewServlet(c.servletDir(name), name)
+  s := NewServlet(c, c.servletDir(name), name)
 
   // Build
   if prevs == nil {  // no previous servlet instance
-    if config.Servlet.HotReload {
+    if c.c.HotReload {
       err := s.initHotReload()
       if err != nil {
         logf("[servlet %q] initHotReload error: %s", s, err.Error())

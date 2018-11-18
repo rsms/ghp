@@ -7,6 +7,7 @@ import (
 )
 
 type Servlet struct {
+  cache     *ServletCache  // managing cache
   dir       string    // servlet source package directory path
   name      string    // identifying name (e.g. "foo/bar")
   version   int64     // Unix nanotime of .so mtime
@@ -19,8 +20,9 @@ type Servlet struct {
 }
 
 
-func NewServlet(dir, name string) *Servlet {
+func NewServlet(cache *ServletCache, dir, name string) *Servlet {
   s := &Servlet{
+    cache: cache,
     dir: dir,
     name: name,
   }
@@ -35,6 +37,7 @@ func (s *Servlet) Build() error {
   g := NewGoTool(
     "build",
     "-buildmode=plugin",
+    // "-installsuffix", "cgo",  // if env CGO_ENABLED=0
     // "-gcflags", "-p " + libfile,
     "-ldflags", "-pluginpath=" + s.libfile,  // needed for uniqueness
     "-o", s.libfile,
@@ -49,7 +52,7 @@ func (s *Servlet) Build() error {
     logf("[servlet] go build failed: %s\n%s", err.Error(), stderr.String())
     return makeGoBuildError(
       fmt.Sprintf("failed to build servlet %q", s.name),
-      s.dir,
+      relfile(s.cache.srcdir, s.dir),
       stderr.String(),
     )
   }
@@ -117,6 +120,18 @@ func (s *Servlet) Dealloc() {
 
 func (s *Servlet) String() string {
   return s.name
+}
+
+
+func (s *Servlet) Stop() error {
+  if s.srcGraph != nil {
+    s.srcGraph.Close()
+    s.srcGraph = nil
+  }
+  if s.stopFun != nil {
+    s.stopFun(s.ctx)
+  }
+  return nil
 }
 
 

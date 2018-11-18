@@ -3,20 +3,37 @@ package main
 import (
   "fmt"
   "io"
-  "log"
   "os"
   "path"
   "path/filepath"
+  "reflect"
   "strings"
+  "bytes"
   "time"
 )
 
 func logf(format string, v... interface{}) {
-  log.Printf(format, v...)
+  if logger != nil {
+    logger.Printf(format, v...)
+  }
 }
 
 func errorf(format string, v... interface{}) error {
   return fmt.Errorf(format, v...)
+}
+
+
+func fatalf(msg interface{}, arg... interface{}) {
+  var format string
+  if s, ok := msg.(string); ok {
+    format = s
+  } else if s, ok := msg.(fmt.Stringer); ok {
+    format = s.String()
+  } else {
+    format = fmt.Sprintf("%v", msg)
+  }
+  fmt.Fprintf(os.Stderr, format + "\n", arg...)
+  os.Exit(1)
 }
 
 // assert calls panic() if cond is not true.
@@ -53,20 +70,30 @@ func copyfile(srcname, dstname string) (int64, error) {
   return io.Copy(dst, src)
 }
 
-// pubfilename returns a publicly-presentable filename.
-//
-// If it's relative to PubDir, then "/PubDir/filename" is returned,
-// otherwise the basename of the filename is returned.
-//
-// Useful for including filenames in messages e.g. sent as a HTTP response.
-//
-func pubfilename(filename string) string {
-  s, err := filepath.Rel(config.PubDir, filename)
-  if err == nil && len(s) > 0 {
-    return "/" + s
+// freadStr reads size from file handle f and returns it as a string.
+func freadStr(f *os.File, size int64) (string, error) {
+  var buf bytes.Buffer
+  if int64(int(size)) == size {
+    // buf.Grow takes an int, not an int64
+    buf.Grow(int(size))
   }
-  return filepath.Base(filename)
+  _, err := buf.ReadFrom(f)
+  return buf.String(), err
 }
+
+// relfile returns name relative to dir. If name is not rooted in dir,
+// filepath.Base(name) is returned instead.
+//
+// Useful for including file paths in public content, e.g. a HTTP response.
+//
+func relfile(dir, name string) string {
+  s, err := filepath.Rel(dir, name)
+  if err == nil && len(s) > 0 {
+    return s
+  }
+  return filepath.Base(name)
+}
+
 
 func pathIsDotRelative(name string) bool {
   if name[0] == '.' && len(name) > 1 {
@@ -102,6 +129,19 @@ func abspathList(names string) string {
     return strings.Join(v, pathSep)
   }
   return abspath(names)
+}
+
+// checkIsFile returns an error if filename is not a file
+//
+func checkIsFile(filename string) error {
+  d, err := os.Stat(filename)
+  if err != nil {
+    return err
+  }
+  if !d.Mode().IsRegular() {
+    return errorf("%s is not a file", filename)
+  }
+  return nil
 }
 
 // countByte returns the number of occurances of b in s
@@ -140,4 +180,63 @@ var unixEpochTime = time.Unix(0, 0)
 //
 func isZeroTime(t time.Time) bool {
   return t.IsZero() || t.Equal(unixEpochTime)
+}
+
+
+func anySlice(values interface{}) ([]interface{}, error) {
+  var items []interface{}
+
+  val := reflect.ValueOf(values)
+
+  if val.Kind() == reflect.Slice {
+    z := val.Len()
+    items = make([]interface{}, z)
+    for i := 0; i < z; i++ {
+      items[i] = val.Index(i).Interface()
+    }
+  } else {
+    return items, errorf("not a slice")
+  }
+
+  // TODO: support maps
+
+  return items, nil
+}
+
+
+// fanApply takes a collection of values and applies fn to each value
+// in a separate goroutine.
+// It "fans out", waits for all fn invocations to return and "fans in" to
+// return an error, or nil.
+//
+// Returns first error occured, if any.
+// Waits for everything to complete even in the case of an error.
+//
+func fanApply(values interface{}, fn func(interface{})error) error {
+  errch := make(chan error)
+
+  items, err := anySlice(values)
+  if err != nil {
+    return err
+  }
+
+  for _, v := range items {
+    go func(v interface{}) {
+      defer func() {
+        if r := recover(); r != nil {
+          errch <- errorf("panic %v", r)
+        }
+      }()
+      errch <- fn(v)
+    }(v)
+  }
+
+  for range items {
+    e := <- errch
+    if e != nil && err == nil {
+      err = e
+    }
+  }
+
+  return err
 }

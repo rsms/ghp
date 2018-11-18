@@ -49,4 +49,5 @@ type Response interface {
   Write([]byte) (int, error)
   WriteString(string) (int, error)
   WriteHeader(statusCode int)
+  Flush() bool  // returns true on success
 }

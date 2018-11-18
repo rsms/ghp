@@ -5,18 +5,112 @@ import (
   "fmt"
   "html/template"
   "io/ioutil"
-  "log"
+  "sync"
   "os"
   "time"
   "sort"
 )
 
 
+type HtmlDirLister struct {
+  pubdir string
+  t      *template.Template
+}
+
+
+func NewHtmlDirLister(pubdir string, c *DirListConfig) (*HtmlDirLister, error) {
+  d := &HtmlDirLister{ pubdir: pubdir }
+
+  if c.Template == "" {
+    d.t = d.loadDefaultTemplate()
+  } else {
+    t, err := d.loadTemplate(c.Template)
+    if err != nil {
+      return d, err
+    }
+    d.t = t
+  }
+
+  return d, nil
+}
+
+
+var (
+  defaultTemplateOnce sync.Once
+  defaultTemplate *template.Template
+)
+
+func (d *HtmlDirLister) loadDefaultTemplate() *template.Template {
+  defaultTemplateOnce.Do(func() {
+    t, err := d.loadTemplate(pjoin(ghpdir, "misc", "dirlist.html"))
+    if err != nil {
+      panic(err)
+    }
+    defaultTemplate = t
+  })
+  return defaultTemplate
+}
+
+
+func (d *HtmlDirLister) loadTemplate(filename string) (*template.Template, error) {
+  funcs := make(map[string]interface{})
+
+  funcs["utcdate"] = helper_utcdate
+  funcs["timestamp"] = helper_timestamp
+  funcs["bytesize"] = helper_bytesize
+  funcs["fnisvisible"] = helper_fnisvisible
+  funcs["fnisroot"] = helper_fnisroot
+
+  // load template
+  t := template.New(relfile(d.pubdir, filename))
+  t.Funcs(funcs)
+  t.Option("missingkey=zero")
+    // [missingkey=zero]
+    //   The operation returns the zero value for the map type's element
+  data, err := ioutil.ReadFile(filename)
+  if err == nil {
+    _, err = t.Parse(string(data))
+  }
+  return t, err
+}
+
+
 type dirlistData struct {
-  URL   string
   Name  string
   Files []os.FileInfo
 }
+
+type ByFilename []os.FileInfo
+func (a ByFilename) Len() int           { return len(a) }
+func (a ByFilename) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
+func (a ByFilename) Less(i, j int) bool { return a[i].Name() < a[j].Name() }
+
+
+// RenderHtml generates a HTML directory listing.
+//
+func (d *HtmlDirLister) RenderHtml(fspath string, userpath string) ([]byte, error) {
+  file, err := os.Open(fspath)
+  if err != nil {
+    return []byte{}, err
+  }
+  defer file.Close()
+
+  entries, err := file.Readdir(0)
+  if err != nil {
+    return []byte{}, err
+  }
+
+  sort.Sort(ByFilename(entries))
+
+  var w bytes.Buffer
+  err = d.t.Execute(&w, dirlistData{
+    Name: userpath,
+    Files: entries,
+  })
+
+  return w.Bytes(), err
+}
+
 
 const utcTimeFormat = "2006-01-02 15:04:05 UTC"
 
@@ -53,83 +147,3 @@ func helper_fnisroot(s string) bool {
   return s == "/"
 }
 
-
-var (
-  dirlistHTMLTemplate *template.Template
-  dirlistHTMLTemplateErr error
-)
-
-
-func loadTemplate(filename string, funcs map[string]interface{}) (*template.Template, error) {
-  t := template.New(filename)
-  t.Funcs(funcs)
-  t.Option("missingkey=zero")
-    // [missingkey=zero]
-    //   The operation returns the zero value for the map type's element
-  data, err := ioutil.ReadFile(filename)
-  if err == nil {
-    _, err = t.Parse(string(data))
-  }
-  return t, err
-}
-
-
-func getDirlistTemplate() (*template.Template, error) {
-  if dirlistHTMLTemplate != nil {
-    return dirlistHTMLTemplate, dirlistHTMLTemplateErr
-  }
-  t := template.New("dirlist")
-  funcMap := make(map[string]interface{})
-
-  funcMap["utcdate"] = helper_utcdate
-  funcMap["timestamp"] = helper_timestamp
-  funcMap["bytesize"] = helper_bytesize
-  funcMap["fnisvisible"] = helper_fnisvisible
-  funcMap["fnisroot"] = helper_fnisroot
-
-  t, err := loadTemplate(config.DirList.Template, funcMap)
-  dirlistHTMLTemplate = t
-  dirlistHTMLTemplateErr = err
-  if err != nil {
-    log.Printf("[dirlist] failed to parse html template: %s", err.Error())
-  }
-
-  return t, err
-}
-
-type ByFilename []os.FileInfo
-func (a ByFilename) Len() int           { return len(a) }
-func (a ByFilename) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
-func (a ByFilename) Less(i, j int) bool { return a[i].Name() < a[j].Name() }
-
-// dirlistHtml generates a HTML directory listing.
-// On failure, an empty string is returned.
-//
-func dirlistHtml(fspath string, userpath string) ([]byte, error) {
-  file, err := os.Open(fspath)
-  if err != nil {
-    return []byte{}, err
-  }
-  defer file.Close()
-
-  entries, err := file.Readdir(0)
-  if err != nil {
-    return []byte{}, err
-  }
-
-  sort.Sort(ByFilename(entries))
-
-  w := new(bytes.Buffer)
-  t, err := getDirlistTemplate()
-  if err != nil {
-    return []byte{}, err
-  }
-
-  err = t.Execute(w, dirlistData{
-    URL: "/no-index", // FIXME TODO
-    Name: userpath,
-    Files: entries,
-  })
-
-  return w.Bytes(), err
-}

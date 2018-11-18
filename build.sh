@@ -1,11 +1,13 @@
 #!/bin/bash
 set -e
 cd "$(dirname "$0")"
-SRCDIR_REL=$(dirname "${BASH_SOURCE[0]}")
+source scripts/util.sh
+SRCDIR=$(pwd)
 
 OPT_HELP=false
 OPT_NOGET=false
 OPT_GOUPDATE=false
+OPT_FORCE=false
 
 # parse args
 while [[ $# -gt 0 ]]; do
@@ -16,6 +18,10 @@ while [[ $# -gt 0 ]]; do
     ;;
   -noget)
     OPT_NOGET=true
+    shift
+    ;;
+  -force)
+    OPT_FORCE=true
     shift
     ;;
   -update-go)
@@ -34,17 +40,15 @@ if $OPT_HELP; then
   echo "options:" >&2
   echo "  -h, -help    Show help" >&2
   echo "  -noget       Do NOT fetch or update dependencies" >&2
+  echo "  -force       Build even if products are up-to-date" >&2
   echo "  -update-go   Fetch and install go (even if it's already up to date)" >&2
   exit 1
 fi
 
-
-# parameters & environment
-pushd "$SRCDIR_REL" >/dev/null
-SRCDIR=$(pwd)
-popd >/dev/null
-
-GITREV=$(git rev-parse --short=10 HEAD)
+BUILDTAG=src
+if which git >/dev/null && [[ -d .git ]]; then
+  BUILDTAG=$(git rev-parse --short=10 HEAD)
+fi
 VERSION=$(cat version.txt)
 
 if [[ -z $GHP_GO_VERSION ]]; then
@@ -68,23 +72,18 @@ if ! $OPT_GOUPDATE; then
 fi
 
 if $OPT_GOUPDATE; then
-  if $OPT_NOGET; then
-    echo "$0: -noget is specified but conflicts with updating go." >&2
-    echo "Run $0 again without the -noget flag, or install go $GHP_GO_VERSION manually into $PWD/go" >&2
-    exit 1
-  fi
   FROMSOURCE=false
   if [[ -z $GOOS ]] || [[ "$GOOS" == "" ]] || [[ -z $GOARCH ]] || [[ "$GOARCH" == "" ]]; then
     shopt -s nocasematch
     case $(uname) in
     # see https://github.com/golang/go/blob/master/src/go/build/syslist.go
     *darwin*)
-      export $GOOS=darwin
+      export GOOS=darwin
       export GOARCH=amd64  # note: go only supports amd64 on mac
       ;;
     *linux*)
       # Linux ip-10-0-0-181 4.15.0 #21-Ubuntu x86_64 x86_64 x86_64 GNU/Linux
-      export $GOOS=linux
+      export GOOS=linux
       case $(uname -i) in
         *x86_64*)
           export GOARCH=amd64
@@ -155,21 +154,49 @@ EOF
 fi
 
 
-pushd ghp >/dev/null
+GHP_PROG=$SRCDIR/bin/ghp
 
-
-if ! $OPT_NOGET; then
-  echo "go get ."
-  go get -d -v .
+# Decide if we want to be lazy and skip rebuilding if product is
+# newer than source.
+PRODUCT_OUTDATED=true
+if ! $OPT_FORCE && \
+   ! $OPT_GOUPDATE && \
+   ! has_newer "$GHP_PROG" ghp '*.go' && \
+   ! has_newer "$GHP_PROG" gopath/src/ghp '*.go'
+then
+  PRODUCT_OUTDATED=false
 fi
 
 
-echo "go build bin/ghp"
-go build \
-  -buildmode=exe \
-  -ldflags="-X main.ghpVersion=$VERSION -X main.ghpVersionGit=$GITREV" \
-  -pkgdir "$SRCDIR/gopath" \
-  -o $SRCDIR/bin/ghp
+if ! $PRODUCT_OUTDATED; then
+  echo "$GHP_PROG is up to date -- build not required"
+else
+
+  pushd ghp >/dev/null
+
+  if ! $OPT_NOGET; then
+    echo "go get ."
+    go get -d -v .
+  fi
 
 
-popd >/dev/null
+  echo "go build $GHP_PROG.tmp"
+  go build \
+    -buildmode=exe \
+    -ldflags="-X main.ghpVersion=$VERSION -X main.ghpBuildTag=$BUILDTAG" \
+    -pkgdir "$SRCDIR/gopath" \
+    -o "$GHP_PROG.tmp"
+  
+  # CGO_ENABLED=0 go build \
+  #   -buildmode=exe \
+  #   -installsuffix cgo \
+  #   -ldflags="-X main.ghpVersion=$VERSION -X main.ghpBuildTag=$BUILDTAG" \
+  #   -pkgdir "$SRCDIR/gopath" \
+  #   -o "$GHP_PROG.tmp"
+
+  popd >/dev/null
+
+  mv -vf "$GHP_PROG.tmp" "$GHP_PROG"
+
+fi
+

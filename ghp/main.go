@@ -1,28 +1,33 @@
 package main
 
 import (
-  "crypto/sha1"
-  "encoding/base64"
   "fmt"
+  "log"
   "net/http"
   "os"
   "path/filepath"
-  "regexp"
-  "runtime"
-  "strings"
   "time"
   "io/ioutil"
   "flag"
 )
 
 var (
-  ghpVersion    string = "0.0.0" // set at compile time
-  ghpVersionGit string = "?"     // set at compile time
-  ghpdir        string
-  config        *Config
-  appBuildDir   string   // app-specific build products
-  devMode       bool
+  // set at compile time
+  ghpVersion  string = "0.0.0"
+  ghpBuildTag string = "src"
+
+  // set by init()
+  logger *log.Logger
+
+  // set by main()
+  ghpdir  string
+  devMode bool
 )
+
+
+func init() {
+  logger = log.New(os.Stdout, "", log.LstdFlags | log.LUTC)
+}
 
 
 func main() {
@@ -41,19 +46,24 @@ func main() {
   flag.BoolVar(&showVersion, "version", showVersion, "Print version to stdout and exit")
   flag.Parse()
 
-  // version?
+  // show version?
   if showVersion {
-    fmt.Printf("ghp version %s (%s)\n", ghpVersion, ghpVersionGit)
+    fmt.Printf("ghp version %s (%s)\n", ghpVersion, ghpBuildTag)
     return
   }
 
-  // load configuration
-  config, err = loadConfig(configFile)
-  if err != nil {
-    panic(err)
+  // in dev mode, use a short log format
+  if devMode {
+    logger = log.New(os.Stdout, "", log.Ltime)
   }
 
-  // patch config.Go.Gopath to include ghp's gopath
+  // load configuration
+  config, configFile, err := loadConfig(configFile)
+  if err != nil {
+    fatalf("%s: %v", configFile, err)
+  }
+
+  // patch config.Go.Gopath to include ghpdir/gopath
   ghpGopath := pjoin(ghpdir, "gopath")
   if len(config.Go.Gopath) > 0 {
     sep := string(filepath.ListSeparator)
@@ -62,111 +72,43 @@ func main() {
     config.Go.Gopath = ghpGopath
   }
 
-  // in dev mode, print configuration
-  if devMode {
-    logf("mode: development\n----")
-    config.writeYaml(os.Stdout)
-    println("----");
-  }
-
-  // initialize appBuildDir which is unique per go config and pubdir
-  initAppBuildDir()
-
-  // init servlet system
+  // make sure the go tool is available when usign servlets
   if config.Servlet.Enabled {
-    // make sure the go tool is available
-    if err := InitGoTool(); err != nil {
+    if err := InitGoTool(&config.Go); err != nil {
       panic(err)
     }
-
-    // If we are not recycling servlet libs, trash any old ones.
-    if !config.Servlet.Recycle {
-      os.RemoveAll(appBuildDir)
-    }
-
-    // setup a servlet cache
-    servletCache = NewServletCache(config.PubDir, appBuildDir)
-    if config.Servlet.Preload {
-      err := servletCache.LoadAll()
-      if err != nil {
-        panic(err)
-      }
-    }
   }
 
-  // must have at least one server configured
-  if len(config.HttpServer) == 0 {
-    panic("no http-server configured")
-  }
-
-  // start servers
-  var servers []*HttpServer
-  var errch chan error = make(chan error)
-  for _, serverConfig := range config.HttpServer {
-    s := NewHttpServer(serverConfig)
-    servers = append(servers, s)
-    go func() {
-      err := s.ListenAndServe()
-      select {
-      case errch <- err:
-      default:
-      }
-    }()
+  // Create GHP instance
+  prog, err := NewGhp(ghpdir, config)
+  if err != nil {
+    panic(err)
   }
 
   // DEBUG request something from the "example" servlet after 100ms
-  go debugTest()
-
-  // wait for servers
-  err = <- errch
-  if err != nil {
-    for _, s := range servers {
-      s.Close()
+  if devMode {
+    if len(config.Servers) > 0 {
+      go debugTest(config.Servers[0])
     }
+  }
+
+  // Run GHP instance
+  if err := prog.Main(); err != nil {
     panic(err)
   }
 }
 
 
-func initAppBuildDir() {
-  // runtimeTag used for build folder
-  // Note: We assume that the go compiler and environment used to build GHP
-  // is also being used to build servlets. We probably need to guarantee this
-  // anyways, but this comment is here as a -CAUTION- for now.
-  runtimeTag := fmt.Sprintf(
-    ".%s-%s-%s-%s",
-    runtime.Version(),
-    runtime.Compiler,
-    runtime.GOOS,
-    runtime.GOARCH,
-  )
+func debugTest(sc *ServerConfig) {
+  host := fmt.Sprintf("%s://%s:%d", sc.Type, sc.Address, sc.Port)
 
-  // appBuildDir
-  if strings.HasPrefix(config.BuildDir, ghpdir) {
-    // BuildDir is rooted in the shared ghpdir, so include pubdirId
-
-    // compute id of pubdir
-    sha1sum := sha1.Sum([]byte(config.PubDir))
-    pubdirId := base64.RawURLEncoding.EncodeToString(sha1sum[:])
-    pubDirV := strings.Split(config.PubDir, string(filepath.Separator))
-    pubDirFragment := strings.Join(pubDirV[imax(0, len(pubDirV)-2):], "-") + "-"
-    slugRe := regexp.MustCompile(`[^0-9A-Za-z_]+`)
-    pubdirId = slugRe.ReplaceAllString(pubDirFragment, "-") + pubdirId
-
-    appBuildDir = pjoin(config.BuildDir, pubdirId + runtimeTag)
-  } else {
-    appBuildDir = config.BuildDir + runtimeTag
-  }
-}
-
-
-func debugTest() {
   GET := func(url string) {
-    res, err := http.Get("http://localhost:8001/servlet/")
+    res, err := http.Get(url)
     if err != nil {
       logf("GET %s failed: %s", url, err.Error())
       return
     }
+    logf("GET %s => %s (reading body...)", url, res.Status)
     defer res.Body.Close()
     body, err := ioutil.ReadAll(res.Body)
     if err != nil {
@@ -174,27 +116,27 @@ func debugTest() {
       return
     }
     if len(body) > 0 {
-      logf("GET %s => %s\n----\n%s\n----", url, res.Status, body)
-    } else {
-      logf("GET %s => %s.", url, res.Status)
+      logf("GET %s => %s\n---- body ----\n%s\n----", url, res.Status, body)
     }
   }
 
-  time.Sleep(time.Millisecond * 100)
+  time.Sleep(time.Millisecond * 200)
 
   // slam test servlet
-  // go GET("http://localhost:8001/servlet/")
-  // go GET("http://localhost:8001/servlet/")
-  // go GET("http://localhost:8001/servlet/")
-  GET("http://localhost:8001/servlet/")
+  // go GET(host + "/servlet/")
+  // go GET(host + "/servlet/")
+  // go GET(host + "/servlet/")
+  // GET(host + "/servlet/")
 
-  // GET("http://localhost:8001/no-index")
-  // GET("http://localhost:8001/template/nopkg/wrapped.ghp")
-  // GET("http://localhost:8001/template/parent-chain/d.ghp")
+  GET(host + "/servlet-sleeper/")
+
+  // GET(host + "/no-index")
+  // GET(host + "/template/nopkg/wrapped.ghp")
+  // GET(host + "/template/parent-chain/d.ghp")
 
   // slam test page
-  // go GET("http://localhost:8001/template/cyclic-parents/d.ghp")
-  // go GET("http://localhost:8001/template/cyclic-parents/d.ghp")
-  // go GET("http://localhost:8001/template/cyclic-parents/d.ghp")
-  // GET("http://localhost:8001/template/cyclic-parents/d.ghp")
+  // go GET(host + "/template/cyclic-parents/d.ghp")
+  // go GET(host + "/template/cyclic-parents/d.ghp")
+  // go GET(host + "/template/cyclic-parents/d.ghp")
+  // GET(host + "/template/cyclic-parents/d.ghp")
 }

@@ -15,8 +15,6 @@ func (e *GoBuildError) Error() string {
 }
 
 func makeGoBuildError(msg, srcdir, stderr string) *GoBuildError {
-  srcdir = pubfilename(srcdir)
-
   var lines []string
 
   /* Example output on stderr:

@@ -1,14 +1,16 @@
 package main
 
 import (
-  "strings"
   "io"
   "net/http"
+  "os"
+  "strings"
   template "html/template"
 )
 
 
 type Page struct {
+  cache    *PageCache  // managing page cache
   srcpath  string
   name     string
   mtime    int64  // UnixNano
@@ -129,6 +131,33 @@ func (p *Page) renderTemplateString(templateName string, d *pageData) (string, e
     return "", err
   }
   return sb.String(), nil
+}
+
+
+// olderThanSource returns true if a page's source, or any of its parent
+// sources, has been changed since the page or parent page was built.
+//
+func (p *Page) olderThanSource(d os.FileInfo) bool {
+  if fileID(d) != p.fileid ||
+     d.ModTime().UnixNano() > p.mtime ||
+     len(p.relatedPageMissing) > 0 {
+    // source has changed since page was built
+    return true
+  }
+
+  // check parent
+  if p.parent != nil {
+    d, err := os.Stat(p.srcpath)
+    return err != nil || p.parent.olderThanSource(d)
+  }
+
+  // Note: We could optionally use file-system observation and instead
+  // mark sources changed as they change, instead of os.Stat on every
+  // request. os.Stat should be very efficient though, so unclear if the
+  // added complexity and sync locking of a file-system observer approach
+  // would be much better.
+
+  return false
 }
 
 
