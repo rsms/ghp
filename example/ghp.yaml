@@ -18,9 +18,6 @@ servers:
   - <<: *s1
     address: "[::1]:8002"
 
-zdr:
-  group: my-host-unique-id
-
 # hot-reload servlets live as their source code changes
 servlet:
   hot-reload: true
