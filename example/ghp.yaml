@@ -23,7 +23,6 @@ zdr:
 
 # hot-reload servlets live as their source code changes
 servlet:
-  recycle: true
   hot-reload: true
 
 # see <ghp>/misc/ghp.yaml for available properties
