@@ -162,7 +162,7 @@ PRODUCT_OUTDATED=true
 if ! $OPT_FORCE && \
    ! $OPT_GOUPDATE && \
    ! has_newer "$GHP_PROG" ghp '*.go' && \
-   ! has_newer "$GHP_PROG" gopath/src/ghp '*.go'
+   ! has_newer "$GHP_PROG" . '*.go'
 then
   PRODUCT_OUTDATED=false
 fi

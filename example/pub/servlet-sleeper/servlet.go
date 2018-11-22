@@ -2,7 +2,7 @@
 package main
 
 import (
-  "ghp"
+  "github.com/rsms/ghp"
   "time"
 )
 

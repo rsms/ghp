@@ -3,7 +3,6 @@ package main
 import (
   "context"
   "fmt"
-  "ghp"
   "html"
   "io"
   "net"
@@ -16,6 +15,7 @@ import (
   "strings"
   "time"
 
+  "github.com/rsms/ghp"
   "golang.org/x/crypto/acme/autocert"
 )
 

@@ -2,8 +2,9 @@ package main
 
 import (
   "fmt"
-  "ghp"
   "plugin"
+
+  "github.com/rsms/ghp"
 )
 
 type Servlet struct {
