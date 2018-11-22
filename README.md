@@ -138,7 +138,7 @@ over, an ongoing requests is patiently served til completion.
 (cd example && ../bin/ghp -dev)
 ```
 
-Open `http://localhost:8001/example/`
+Open `http://localhost:8002/`
 
 Edit go files in `example/pub` and reload your web browser.
 
