@@ -105,6 +105,31 @@ connections. ZDR is enabled by default and doesn't require you to launch
 - Coordination can be customized using a config file by setting `zdr.group` to
   a unique string that is unique to the host machine.
 
+Try it with the example app:
+
+```
+# Terminal 1                            Terminal 1
+$ cd ghp/example && ../bin/ghp
+listening on http://[::1]:8002
+listening on http://localhost:8002
+listening on https://localhost:8443     $ cd ghp/example && ../bin/ghp
+graceful shutdown initiated             listening on http://[::1]:8002
+graceful shutdown completed             listening on http://localhost:8002
+$                                       listening on https://localhost:8443
+$ ../bin/ghp                            graceful shutdown initiated
+listening on http://[::1]:8002          graceful shutdown completed
+listening on http://localhost:8002      $
+listening on https://localhost:8443     $ pkill -HUP ghp
+graceful shutdown initiated
+graceful shutdown completed
+$
+```
+
+When switching processes, try requesting
+`http://localhost:8002/servlet-sleeper/` which responds very slowly piece by
+piece. You'll notice that even when you start another GHP process that takes
+over, an ongoing requests is patiently served til completion.
+
 
 ## Usage
 
