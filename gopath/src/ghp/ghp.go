@@ -30,15 +30,13 @@ type ServeHTTP = func(*Request, Response)
 // ServletContext represents the servlet instance itself.
 //
 type ServletContext interface {
-  Name() string     // servlet name
-  Version() string  // instance version
+  Name() string      // servlet name
+  Version() string   // instance version
 }
 
 // Request represents a HTTP request.
 //
-type Request struct {
-  *http.Request
-}
+type Request http.Request
 
 // Response represents a HTTP response.
 // Implements io.Writable
@@ -49,5 +47,7 @@ type Response interface {
   Write([]byte) (int, error)
   WriteString(string) (int, error)
   WriteHeader(statusCode int)
+  Print(a interface{}) (int, error)
+  Printf(format string, arg... interface{}) (int, error)
   Flush() bool  // returns true on success
 }

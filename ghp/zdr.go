@@ -1,33 +1,35 @@
 package main
 
 import (
-  "net"
-  "strings"
   "io"
+  "net"
   "os"
-  "time"
   "path/filepath"
+  "strings"
+  "syscall"
+  "time"
 )
 
 const (
   cmdTakeOver = "take-over"
-  cmdOk = "ok"
-  cmdError = "error"
+  cmdFdInfo = "fd-info"
 )
 
 // Zero-downtime restart
 type Zdr struct {
-  Shutdown   func()  // Called to gracefully shut down the system
-  
+  g          *Ghp
   sockpath   string
   masterln   net.Listener
+  masterlnfd int
   shutdownch chan error
 }
 
 
-func NewZdr(sockpath string) *Zdr {
+func NewZdr(g *Ghp, sockpath string) *Zdr {
   return &Zdr{
+    g: g,
     sockpath: sockpath,
+    masterlnfd: -1,
   }
 }
 
@@ -54,188 +56,47 @@ func (z *Zdr) AwaitShutdown() error {
 //
 // If timeout is <=0 then this function waits forever.
 //
-func (z *Zdr) AcquireMasterRole(timeout time.Duration) error {
-  if z.Shutdown == nil {
-    return errorf("[zdr] .Shutdown is nil")
+func (z *Zdr) AcquireMasterRole(timeout time.Duration) ([]*ConnSock, error) {
+  // deadline for acquisition
+  deadline := time.Now().Add(timeout)
+
+  // setup shutdown channel for whenever we shut down
+  z.shutdownch = make(chan error, 1)
+
+  // build unix socket address
+  addr := &net.UnixAddr{ Net: "unix", Name: z.sockpath }
+
+  // Assume no other process is running and attempt to become master
+  retry_becomeInitialMaster:
+  err := z.becomeInitialMaster(addr)
+  if !isAddrInUse(err) {
+    // success or system error
+    return nil, err
   }
 
-  listenRetried := false
+  // If we get here, another process is currently master.
 
-  retry_acquireMasterRole:
-  err := z.acquireMasterRole()
-  if err != nil && isAddrInUse(err) {
-    // address in use
-
-    logf("[zdr] taking over master role...")
-
-    // This means that either another instance is running and is listening,
-    // or that a previous instance crached and left the socket dangling.
-    //
-    // In any case, we first try to connect to the socket.
-    conn, err := net.Dial("unix", z.sockpath)
-
-    if err != nil {
-      if !listenRetried && strings.Index(err.Error(), "connection refused") != -1 {
-        // Probably left-over socket -- remove and try again to listen
-        os.Remove(z.sockpath)
-        listenRetried = true
-        goto retry_acquireMasterRole
-      }
-      return err
-    }
-
-    // Take over
-    if timeout > 0 {
-      conn.SetReadDeadline(time.Now().Add(timeout))
-    }
-    err = z.takeOverMasterRole(conn)
-    if err != nil {
-      return err
-    }
-
-    // Take-over succeeded and we should now be able to listen
-    listenRetried = false // allow retry
-    goto retry_acquireMasterRole
+  // Ask to take over the role.
+  conns, err := z.takeOverMaster(addr, deadline)
+  if isConnRefused(err) {
+    // possible race condition where the master quit in between us attempting
+    // listen and dialing. Might also be the case of a crashed master, in which
+    // case we need to remove the socket file.
+    os.Remove(z.sockpath)
+    goto retry_becomeInitialMaster
   }
-
-  return err
+  return conns, err
 }
 
 
-// Shutdown gives up the master role.
-// Calls z.Shutdown followed by closing the socket listener.
-//
-func (z *Zdr) shutdown() error {
-  if z.masterln == nil {
-    return errorf("does not have master role")
-  }
+// becomeInitialMaster attempts to become the listener of the shared socket.
+// It will fail if another process is currently listening.
+// On success, the calling process is the master.
+func (z *Zdr) becomeInitialMaster(addr *net.UnixAddr) error {
+  retried := true
 
-  var err error
-
-  // Call z.Shutdown which will block until shutdown has completed
-  func() {
-    defer func() {
-      if r := recover(); r != nil {
-        err = errorf("panic in z.Shutdown: %v", r)
-      }
-    }()
-    z.Shutdown()
-  }()
-
-  z.shutdownch <- err
-
-  return nil
-}
-
-
-func (z *Zdr) Close() {
-  if z.masterln != nil {
-    z.masterln.Close()
-    z.masterln = nil
-    // os.Remove(z.sockpath)
-  }
-}
-
-
-func (z *Zdr) masterLoop() {
-  defer z.masterln.Close()
-
-  for {
-    // Handle each connection in a serial manner to avoid race conditions.
-    conn, err := z.masterln.Accept()
-    if err != nil {
-      logf("[zdr] error in Accept: %v", err)
-      // TODO: handle "use of closed network connection" (when terminating app)
-      // TODO: call Listen?
-      return
-    }
-
-    defer conn.Close()
-
-    // logf("masterLoop: %p connected", conn)
-
-    // communicate serially
-    mr := NewIpcMsgReader(conn)
-    mw := NewIpcMsgWriter(conn)
-    for {
-      // read next message
-      msg, err := mr.Read()
-
-      // Handle read error
-      if err != nil {
-        conn.Close()
-        if err == io.EOF {
-          logf("[zdr] %p disconnected", conn)
-        } else {
-          logf("[zdr] %p error %v (closing connection)", conn, err)
-        }
-        break
-      }
-
-      if msg.Cmd == cmdTakeOver {
-        // The requestor wants to take over the master role.
-        // Give up the master role.
-        if err := z.shutdown(); err != nil {
-          // Reply to requestor if there was an error with shutdown
-          mw.Write(NewIpcMsg(cmdError, err.Error()))
-        }
-
-        // Close listener to signal OK
-        z.Close()
-        conn.Close()
-
-        return  // end masterLoop
-      } else {
-        // log and ignore unexpected messages
-        logf("[zdr] masterLoop received unexpected message %+v", msg)
-      }
-    } // message read loop
-
-  }
-}
-
-
-func (z *Zdr) takeOverMasterRole(conn net.Conn) error {
-  defer conn.Close()
-
-  mw := NewIpcMsgWriter(conn)
-  mr := NewIpcMsgReader(conn)
-
-  // send request to take over the role as master
-  err := mw.Write(NewIpcMsg(cmdTakeOver))
-  if err != nil {
-    return err
-  }
-
-  // wait for reply
-  m, err := mr.Read()
-  if err != nil {
-    // success
-    // Note: We primarily care about err == io.EOF, however a broken pipe
-    // or any other communication error is assumed to mean a success since
-    // the other ends closes the connection (reliquished it.)
-    return nil
-  }
-
-  // read reply
-  errmsg := "?"
-  if m.Cmd == cmdError {
-    if len(m.Args) > 0 {
-      errmsg = m.Args[0]
-    }
-  } else {
-    errmsg = "unexpected ipcmsg " + m.Cmd
-  }
-  return errorf("other program failed to relinquish master role: %s", errmsg)
-}
-
-
-func (z *Zdr) acquireMasterRole() error {
-  retried := false
-  
   listen_:
-  // logf("try acquire master role...")
-  ln, err := net.Listen("unix", z.sockpath)
+  ln, err := net.ListenUnix("unix", addr)
 
   if err != nil {
     if !retried {
@@ -251,10 +112,6 @@ func (z *Zdr) acquireMasterRole() error {
   z.masterln = ln
 
   // acquired master role!
-
-  // setup shutdown channel for whenever we shut down
-  z.shutdownch = make(chan error, 1)
-
   // dispatch master loop (reads and writes messages)
   go z.masterLoop()
 
@@ -262,7 +119,249 @@ func (z *Zdr) acquireMasterRole() error {
 }
 
 
-func isAddrInUse(err error) bool {
-  return strings.Index(err.Error(), "address already in use") != -1
+func (z *Zdr) takeOverMaster(addr *net.UnixAddr, deadline time.Time) ([]*ConnSock, error) {
+  // connect to the current master
+  conn, err := net.DialUnix("unix", nil, addr)
+  if err != nil {
+    return nil, err
+  }
+
+  // connected
+  defer conn.Close()
+  conn.SetReadDeadline(deadline)
+
+  mw := NewIpcMsgWriter(conn)
+
+  // send request to take over the role as master
+  if err := mw.Write(cmdTakeOver); err != nil {
+    return nil, err
+  }
+
+  // receive fd info from master
+  mr := NewIpcMsgReader(conn)
+  fdinfo, err := mr.Read(cmdFdInfo)
+  if err != nil {
+    return nil, err
+  }
+  nfds := len(fdinfo.Args)
+
+  // receive master listener fd
+  fds, err := FdExchangeRecvFDs(conn, nfds)
+  if err != nil {
+    return nil, errorf("FdExchangeRecvFDs: %v", err)
+  }
+  if len(fds) < nfds {
+    return nil, errorf("too few fds received from master")
+  }
+
+  // construct masterln with the first received FD
+  z.masterlnfd = fds[0]
+  f := os.NewFile(uintptr(z.masterlnfd), z.sockpath)
+  z.masterln, err = net.FileListener(f)
+  if err != nil {
+    return nil, err
+  }
+
+  // make list of ConnectedSock from rest of FDs
+  var conns []*ConnSock
+  for i := 1; i < nfds; i++ {
+    s, err := ParseConnSock(fdinfo.Args[i])
+    if err != nil {
+      return nil, err
+    }
+    s.Fd = fds[i]
+    conns = append(conns, s)
+  }
+
+  // acquired master role!
+  // dispatch master loop (reads and writes messages)
+  go z.masterLoop()
+
+  return conns, nil
 }
 
+
+// conn is the connection to the requestor
+//
+func (z *Zdr) releaseMasterRole(conn net.Conn) error {
+  // Send all of our listener FDs, starting with the zdr socket
+
+  // fds
+  fds := make([]int, 1 + len(z.g.servers.httpServers))
+  fduris := make([]string, len(fds))
+
+  // access zdr listener fd
+  lnfd, err := getListenerFd(z.masterln)
+  if err != nil {
+    return err
+  }
+  fds[0] = lnfd
+  fduris[0] = "unix:" + z.sockpath
+
+  for i, s := range z.g.servers.httpServers {
+    // get FD of server listener
+    fd, err := getListenerFd(s.l)
+    if err != nil {
+      return err
+    }
+
+    // add to fds arrat
+    fds[i + 1] = fd
+    fduris[i + 1] = "tcp:" + s.Addr()
+
+    // detach listener from server
+    s.l = nil
+  }
+
+  // send fduris
+  mw := NewIpcMsgWriter(conn)
+  if err := mw.Write(cmdFdInfo, fduris...); err != nil {
+    return err
+  }
+
+  // send fds
+  err = FdExchangeSendFDs(conn, fds...)
+  if err != nil {
+    return err
+  }
+
+  // detach master listener
+  z.masterln = nil
+  z.masterlnfd = -1
+
+  // shutdown
+  if err := z.shutdown(); err != nil {
+    return err
+  }
+
+  // Close listener to signal OK
+  return nil
+}
+
+
+// shutdown calls z.g.Shutdown in a safe manner and sends the result
+// on z.shutdownch
+func (z *Zdr) shutdown() error {
+  var err error
+
+  // Call z.g.Shutdown which will block until shutdown has completed
+  func() {
+    defer func() {
+      if r := recover(); r != nil {
+        err = errorf("panic in Zdr g.Shutdown: %v", r)
+      }
+    }()
+    z.g.Shutdown()
+  }()
+
+  z.shutdownch <- err
+
+  return nil
+}
+
+
+func (z *Zdr) Close() {
+  if z.masterln != nil {
+    z.masterln.Close()
+    z.masterln = nil
+  }
+  if z.shutdownch != nil {
+    close(z.shutdownch)
+    z.shutdownch = nil
+  }
+}
+
+
+func (z *Zdr) masterLoop() {
+  var err error
+  var conn net.Conn
+
+  for {
+    if conn != nil {
+      conn.Close()
+      conn = nil
+    }
+
+    // Handle each connection in a serial manner to avoid race conditions.
+    conn, err = z.masterln.Accept()
+    if err != nil {
+      if !isUseOfClosedConn(err) {
+        logf("[zdr] error in Accept: %v", err)
+      }
+      // else: z.masterln closed -- end masterLoop
+      return
+    }
+
+    // read a message, expecting "take over" request
+    mr := NewIpcMsgReader(conn)
+    if _, err := mr.Read(cmdTakeOver); err != nil {
+      conn.Close()
+      if err == io.EOF {
+        logf("[zdr] %p disconnected", conn)
+      } else {
+        logf("[zdr] %p error %v (closing connection)", conn, err)
+      }
+
+      // accept another request
+      continue
+    }
+
+    // The requestor wants to take over the master role. Give it up.
+    if err := z.releaseMasterRole(conn); err != nil {
+      logf("[zdr] failed to release master role: %v", err)
+
+      // accept another request
+      continue
+    }
+
+    // success -- end masterLoop since z.masterln is now invalid.
+    conn.Close()
+    return
+  }
+}
+
+
+// getListenerFd returns the file descriptor for a net.Listener
+//
+func getListenerFd(l net.Listener) (int, error) {
+  var err error
+  var rconn syscall.RawConn
+
+  // access rconn
+  if ln, ok := l.(*net.TCPListener); ok {
+    rconn, err = ln.SyscallConn()
+  } else if ln, ok := l.(*net.UnixListener); ok {
+    rconn, err = ln.SyscallConn()
+  } else {
+    err = errorf("invalid listener %+v", l)
+  }
+
+  fd := -1
+
+  if err == nil {
+    err = rconn.Control(func(fd_ uintptr) {
+      fd = int(fd_)
+    })
+  }
+
+  return fd, err
+}
+
+
+func isAddrInUse(err error) bool {
+  return (
+    err != nil &&
+    strings.Index(err.Error(), "address already in use") != -1)
+}
+
+func isConnRefused(err error) bool {
+  return (
+    err != nil &&
+    strings.Index(err.Error(), "connection refused") != -1)
+}
+
+func isUseOfClosedConn(err error) bool {
+  return (
+    err != nil &&
+    strings.Index(err.Error(), "use of closed network connection") != -1)
+}

@@ -173,6 +173,13 @@ func imax(a, b int) int {
   return b
 }
 
+func imin(a, b int) int {
+  if a < b {
+    return a
+  }
+  return b
+}
+
 
 var unixEpochTime = time.Unix(0, 0)
 

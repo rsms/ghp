@@ -6,7 +6,6 @@ import (
   "go/parser"
   "go/token"
   "io/ioutil"
-  "log"
   "os"
   "path/filepath"
   "strings"
@@ -128,7 +127,7 @@ func NewSrcGraph(rootdir string) *SrcGraph {
 
 func (g *SrcGraph) logd(msg string, v... interface{}) {
   if sgDevMode {
-    fmt.Printf("[SG] " + msg, v...)
+    logf("[SG] " + msg, v...)
   }
 }
 
@@ -610,82 +609,15 @@ func (g *SrcGraph) fswatcherEventLoop() {
         g.handleFSEvent(&event)
       }
     case err := <-w.Errors:
-      log.Println("[sg/fswatch] error:", err)
+      logf("[sg/fswatch] error: %v", err)
       break loop0
     case <-stopch:
-      log.Print("[sg/fswatch] event loop stopped")
+      // logf("[sg/fswatch] event loop stopped")
       return
     }
   }
   // stop here after an error occured, waiting for a call to stopFSWatcher()
   <-stopch
-  log.Print("[sg/fswatch] event loop stopped")
+  // logf("[sg/fswatch] event loop stopped")
 }
-
-
-
-// build.Package (https://golang.org/pkg/go/build/#Package)
-// {
-//   Dir: "/Users/rsms/src/ghp/pub/example"
-//   Name: "main"
-//   ImportPath: "."
-//   Root:
-//   SrcRoot:
-//   PkgRoot:
-//   PkgTargetRoot:
-//   BinDir:
-//   Goroot:false
-//   PkgObj:
-//   AllTags:[]
-//   ConflictDir:
-//   BinaryOnly:false
-//   GoFiles:[index.go]
-//   CgoFiles:[]
-//   IgnoredGoFiles:[]
-//   InvalidGoFiles:[]
-//   CFiles:[]
-//   CXXFiles:[]
-//   MFiles:[]
-//   HFiles:[]
-//   FFiles:[]
-//   SFiles:[]
-//   SwigFiles:[]
-//   SwigCXXFiles:[]
-//   SysoFiles:[]
-//   // ...
-//   Imports: [./foo, ghp]
-//   ImportPos: map[
-//     "ghp": [/Users/rsms/src/ghp/pub/example/index.go:4:3]
-//     "./foo": [/Users/rsms/src/ghp/pub/example/index.go:5:3]
-//   ]
-//   // ...
-// }
-
-
-
-// err := filepath.Walk(rootdir, func(path string, d os.FileInfo, err error) error {
-//   if err != nil {
-//     return err
-//   }
-//   g.logd("path=%q, d.Name()=%q\n", path, d.Name())
-
-//   if d.IsDir() {
-//     return filepath.SkipDir
-//   }
-
-//   if strings.HasSuffix(d.Name(), ".go") {
-//     nsrcfiles++
-//     mtime := d.ModTime()
-//     if mtime.After(maxtime) {
-//       maxtime = mtime
-//     }
-//     return filepath.SkipDir
-//   }
-//   return nil
-// })
-
-// // return error if we didn't find any .go files
-// if err == nil && nsrcfiles == 0 {
-//   err = fmt.Errorf("no source files found in %q", rootdir)
-// }
 

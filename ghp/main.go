@@ -1,14 +1,16 @@
 package main
 
 import (
+  "flag"
   "fmt"
+  "io/ioutil"
   "log"
   "net/http"
   "os"
+  "os/signal"
   "path/filepath"
+  "syscall"
   "time"
-  "io/ioutil"
-  "flag"
 )
 
 var (
@@ -80,10 +82,36 @@ func main() {
   }
 
   // Create GHP instance
-  prog, err := NewGhp(ghpdir, config)
+  ghp, err := NewGhp(ghpdir, config)
   if err != nil {
     panic(err)
   }
+
+  // setup SIGHUP signal handler for graceful shutdown
+  sigch := make(chan os.Signal, 1)
+  signal.Notify(sigch, syscall.SIGHUP)
+  gotHUP := false
+  go func(){
+    for {
+      <-sigch  // await signal
+      if !gotHUP {
+        // first SIGHUP starts graceful shutdown
+        gotHUP = true
+        go ghp.Shutdown()
+      } else {
+        // second SIGHUPs causes immediate close
+        go func() {
+          if err := ghp.Close(); err != nil {
+            panic(err)
+          }
+        }()
+        break
+      }
+    }
+    for {
+      <-sigch
+    }
+  }()
 
   // DEBUG request something from the "example" servlet after 100ms
   if devMode {
@@ -93,14 +121,14 @@ func main() {
   }
 
   // Run GHP instance
-  if err := prog.Main(); err != nil {
+  if err := ghp.Main(); err != nil {
     panic(err)
   }
 }
 
 
 func debugTest(sc *ServerConfig) {
-  host := fmt.Sprintf("%s://%s:%d", sc.Type, sc.Address, sc.Port)
+  host := fmt.Sprintf("%s://%s", sc.Type, sc.Address)
 
   GET := func(url string) {
     res, err := http.Get(url)

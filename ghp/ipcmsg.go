@@ -25,7 +25,12 @@ func NewIpcMsgWriter(w io.Writer) *IpcMsgWriter {
   return &IpcMsgWriter{ Encoder: gob.NewEncoder(w) }
 }
 
-func (w *IpcMsgWriter) Write(m interface{}) error {
+func (w *IpcMsgWriter) Write(cmd string, arg... string) error {
+  m := IpcMsg{ Cmd: cmd, Args: arg }
+  return w.WriteMsg(&m)
+}
+
+func (w *IpcMsgWriter) WriteMsg(m interface{}) error {
   return w.Encoder.Encode(m)
 }
 
@@ -39,8 +44,15 @@ func NewIpcMsgReader(r io.Reader) *IpcMsgReader {
   return &IpcMsgReader{ Decoder: gob.NewDecoder(r) }
 }
 
-func (r IpcMsgReader) Read() (*IpcMsg, error) {
+func (r IpcMsgReader) Read(cmd string) (*IpcMsg, error) {
   var m IpcMsg
-  err := r.Decoder.Decode(&m)
+  err := r.ReadMsg(&m)
+  if err == nil && m.Cmd != cmd {
+    err = errorf("unexpected ipc message %q (expected %q)", m.Cmd, cmd)
+  }
   return &m, err
+}
+
+func (r IpcMsgReader) ReadMsg(m *IpcMsg) error {
+  return r.Decoder.Decode(m)
 }

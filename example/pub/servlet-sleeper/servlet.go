@@ -1,22 +1,24 @@
+// An example of slowly responding with chunks
 package main
 
 import (
   "ghp"
   "time"
-  "fmt"
 )
+
+const sleepTime = 5
 
 func ServeHTTP(r *ghp.Request, w ghp.Response) {
   w.Header().Set("Transfer-Encoding", "chunked")
-  w.Header().Set("X-Content-Type-Options", "nosniff")
+  w.Header().Set("Content-Type", "text/html")
 
-  w.WriteString("Sleeping for 5 seconds...\n")
+  w.Printf("<body>Sleeping for %d seconds...<br>\n", sleepTime)
 
-  for i := 5; i > 0; i-- {
-    fmt.Fprintf(w, "%d...\n", i)
+  for i := sleepTime; i > 0; i-- {
+    w.Printf("%d...<br>\n", i)
     w.Flush()
     time.Sleep(1 * time.Second)
   }
 
-  w.WriteString("I'm awake! End response.\n")
+  w.Print("I'm awake! End response.</body>\n")
 }

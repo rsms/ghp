@@ -97,6 +97,16 @@ func (c *ServletCache) Servlets() []*Servlet {
 }
 
 
+func (c *ServletCache) Close() {
+  c.itemsmu.Lock()
+  defer c.itemsmu.Unlock()
+  for _, s := range c.items {
+    s.Stop()
+  }
+  c.items = nil
+}
+
+
 func (c *ServletCache) Shutdown() error {
   return fanApply(c.Servlets(), func(v interface{}) error {
     return v.(*Servlet).Stop()

@@ -6,8 +6,9 @@ pub-dir: pub
 
 # servers
 servers:
-  - address: 127.0.0.1  # defaults to "" (accept from anywhere)
-    port: 8002          # defaults to 80 for type http, 443 for https
+  # address hostname defaults to "" (accept from anywhere)
+  # address port defaults to ":80" for type "http" and ":443" for type "https"
+  - address: 127.0.0.1:8002
     type: http          # http or https. Defaults to http
     dirlist:
       # Enable listing of directories which are missing an index file.
@@ -16,7 +17,7 @@ servers:
       # By default <ghp>/misc/dirlist.html is used as a template for
       # directory listings. "template" allows you to specify a custom
       # template file. See <ghp>/misc/dirlist.html for usage.
-      # template: custom/dirlist.html
+      #template: custom/dirlist.html
 
 
 # zdr enables Zero-Downtime Restarts by allowing two GHP processes to
@@ -46,7 +47,7 @@ zdr:
 
   # Explicit group identifier.
   # Must only contain the following characters: 0-9A-Za-z_-.
-  # group: my-host-unique-id
+  #group: my-host-unique-id
 
 
 # Pages provides convenient go templating

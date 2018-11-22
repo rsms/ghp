@@ -50,7 +50,6 @@ type ServerType = string
 
 type ServerConfig struct {
   Address     string
-  Port        uint16
   Type        ServerType // http, https
   TlsCertFile string `yaml:"tls-cert-file,omitempty"`
   TlsKeyFile  string `yaml:"tls-key-file,omitempty"`

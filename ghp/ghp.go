@@ -79,16 +79,26 @@ func (g *Ghp) Main() error {
     }
   }
 
+  // existing listening sockets, passed on from past process (zdr)
+  var listeners []*ConnSock
+
   // init zero-downtime restart system (blocks on coordination)
   if g.config.Zdr.Enabled {
-    if err := g.startZdr(&g.config.Zdr); err != nil {
+    var err error
+    listeners, err = g.startZdr(&g.config.Zdr)
+    if err != nil {
       return err
     }
     defer g.zdr.Close()
   }
 
-  // Call ListenAndServe on all servers
-  if err := g.servers.ListenAndServe(); err != nil {
+  // Start listening for incoming connections
+  if err := g.servers.Listen(listeners); err != nil {
+    return err
+  }
+
+  // Serve. Blocks until all are done.
+  if err := g.servers.Serve(); err != nil {
     return err
   }
 
@@ -97,22 +107,46 @@ func (g *Ghp) Main() error {
     if err := g.zdr.AwaitShutdown(); err != nil {
       return err
     }
+    g.zdr.Close()
   }
 
   return nil
 }
 
 
+func (g *Ghp) Close() error {
+  if err := g.servers.Close(); err != nil {
+    return err
+  }
+  if g.servletCache != nil {
+    g.servletCache.Close()
+  }
+  return nil
+}
+
+
 func (g *Ghp) Shutdown() {
-  logf("graceful shutdown initiated")
+  if devMode {
+    logf("graceful shutdown initiated")
+  }
+
   if err := g.servers.Shutdown(); err != nil {
     logf("error shutting down servers: %v", err)
   }
+
   // shut down all servlets
   if g.servletCache != nil {
     g.servletCache.Shutdown()
   }
-  logf("graceful shutdown completed")
+
+  // close zdr
+  if g.zdr != nil {
+    g.zdr.Close()
+  }
+
+  if devMode {
+    logf("graceful shutdown completed")
+  }
 }
 
 
@@ -134,7 +168,7 @@ func (g *Ghp) initServlets(c *ServletConfig) error {
 }
 
 
-func (g *Ghp) startZdr(c *ZdrConfig) error {
+func (g *Ghp) startZdr(c *ZdrConfig) ([]*ConnSock, error) {
   // by default, place socket file in app cache directory
   sockpath := pjoin(g.appCacheDir, "zdr.sock")
 
@@ -144,8 +178,7 @@ func (g *Ghp) startZdr(c *ZdrConfig) error {
     sockpath = pjoin(ghpdir, "cache", "zdr." + c.Group + ".sock")
   }
 
-  g.zdr = NewZdr(sockpath)
-  g.zdr.Shutdown = g.Shutdown
+  g.zdr = NewZdr(g, sockpath)
 
   // make sure zdr closes on program exit
   AtExit(func() {

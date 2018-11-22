@@ -4,16 +4,19 @@ pub-dir: pub
 # accept both HTTP/1.1 and HTTPS/2 connections
 servers:
   - &s1
-    address: localhost
-    port: 8002
+    address: localhost:8002
     dirlist:
       enabled: true
 
   - <<: *s1
+    address: localhost:8443
     type: https
-    port: 8443
     tls-cert-file: tls/localhost.cert
     tls-key-file:  tls/localhost.key
+
+  # also listen on IPv6
+  - <<: *s1
+    address: "[::1]:8002"
 
 zdr:
   group: my-host-unique-id

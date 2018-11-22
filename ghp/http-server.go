@@ -1,40 +1,50 @@
 package main
 
 import (
+  "context"
   "fmt"
   "ghp"
   "html"
   "io"
+  "net"
   "net/http"
   "os"
   "path"
   "path/filepath"
   "runtime/debug"
   "strconv"
+  "strings"
   "time"
-  "context"
 
   "golang.org/x/crypto/acme/autocert"
 )
 
 
-type HttpResponse struct {
-  http.ResponseWriter
+// tcpKeepAliveListener sets TCP keep-alive timeouts on accepted
+// connections. It's used by ListenAndServe and ListenAndServeTLS so
+// dead TCP connections (e.g. closing laptop mid-download) eventually
+// go away.
+// [Lifted from go/src/net/http/server.go]
+type tcpKeepAliveListener struct {
+  *net.TCPListener
 }
 
-
-// setLastModified sets Last-Modified header if modtime != 0
-//
-func (w *HttpResponse) setLastModified(modtime time.Time) {
-  if !isZeroTime(modtime) {
-    w.Header().Set("Last-Modified", modtime.UTC().Format(http.TimeFormat))
+func (ln tcpKeepAliveListener) Accept() (net.Conn, error) {
+  tc, err := ln.AcceptTCP()
+  if err != nil {
+    return nil, err
   }
+  tc.SetKeepAlive(true)
+  tc.SetKeepAlivePeriod(3 * time.Minute)
+  return tc, nil
 }
+
 
 // --------------------------------------------------
 
 type HttpServer struct {
   g       *Ghp
+  l       net.Listener
   s       *http.Server
   c       *ServerConfig
   dirlist *HtmlDirLister
@@ -52,16 +62,17 @@ func NewHttpServer(g *Ghp, c *ServerConfig) *HttpServer {
     s.pageIndexName = "index" + g.pageCache.fileext
   }
 
-  if c.Port == 0 {
+  addr := c.Address
+  if strings.IndexByte(addr, ':') < 0 {
     if s.c.Type == "https" {
-      c.Port = 443
+      addr += ":443"
     } else {
-      c.Port = 80
+      addr += ":80"
     }
   }
 
   s.s = &http.Server{
-    Addr:           fmt.Sprintf("%s:%d", c.Address, c.Port),
+    Addr:           addr,
     ReadTimeout:    10 * time.Second,
     WriteTimeout:   10 * time.Second,
     MaxHeaderBytes: 1 << 20,
@@ -75,8 +86,17 @@ func NewHttpServer(g *Ghp, c *ServerConfig) *HttpServer {
 }
 
 
-func (s *HttpServer) ListenAndServe() error {
+func (s *HttpServer) String() string {
+  return "HttpServer(" + s.c.Type + "://" + s.s.Addr + ")"
+}
+
+
+func (s *HttpServer) Serve() error {
   var err error
+
+  if s.l == nil {
+    return errorf("nil listener on server %v", s)
+  }
 
   // initialize directory lister
   if s.c.DirList.Enabled {
@@ -88,15 +108,27 @@ func (s *HttpServer) ListenAndServe() error {
     s.dirlist = nil
   }
 
+  // wrap TCP listeners in tcpKeepAliveListener to properly configure
+  // keep-alive for accepted connections.
+  ln := s.l
+  if tcpln, ok := ln.(*net.TCPListener); ok {
+    ln = &tcpKeepAliveListener{tcpln}
+  }
+
   if s.c.Type == "https" {
-    return s.listenAndServeHttps()
+    return s.serveHttps(ln)
   } else {
-    return s.listenAndServeHttp()
+    return s.serveHttp(ln)
   }
 }
 
 
-func (s *HttpServer) listenAndServeHttps() error {
+func (s *HttpServer) Addr() string {
+  return s.s.Addr
+}
+
+
+func (s *HttpServer) serveHttps(l net.Listener) error {
   var certFile, keyFile string
   if s.c.Autocert != nil {
     if err := s.configureAutocert(); err != nil {
@@ -114,11 +146,11 @@ func (s *HttpServer) listenAndServeHttps() error {
     }
   }
   logf("listening on https://%s", s.s.Addr)
-  return s.s.ListenAndServeTLS(certFile, keyFile)
+  return s.s.ServeTLS(l, certFile, keyFile)
 }
 
 
-func (s *HttpServer) listenAndServeHttp() error {
+func (s *HttpServer) serveHttp(l net.Listener) error {
   // log warnings when TLS properties are specified but type is not https
   if s.c.TlsCertFile != "" {
     logf("warning: server config with unused tls-cert-file (not https)")
@@ -130,7 +162,7 @@ func (s *HttpServer) listenAndServeHttp() error {
     logf("warning: server config with unused autocert config (not https)")
   }
   logf("listening on http://%s", s.s.Addr)
-  return s.s.ListenAndServe()
+  return s.s.Serve(l)
 }
 
 
@@ -297,9 +329,8 @@ func (s *HttpServer) serveServlet(fspath string, d os.FileInfo, w *HttpResponse,
   } else if servlet.serveHTTP == nil {
     s.replyError(w, "missing ServeHTTP in servlet")
   } else {
-    req := &ghp.Request{Request: r}
-    res := NewServletResponse(w)
-    servlet.serveHTTP(req, res)
+    req := (*ghp.Request)(r)
+    servlet.serveHTTP(req, w)
   }
 }
 
@@ -325,7 +356,6 @@ func (s *HttpServer) serveDirListing(f *os.File, d os.FileInfo, w *HttpResponse,
 
 func (s *HttpServer) serveFile(f *os.File, d os.FileInfo, w *HttpResponse, r *http.Request) {
   http.ServeContent(w, r, d.Name(), d.ModTime(), f)
-  // http.FileServer(http.Dir(pubdir))
 }
 
 

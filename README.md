@@ -6,6 +6,7 @@ Serve stuff over the interwebs with Go in a PHP-like fashion.
 - A directory with a `servlet.go` file is considered an endpoint. `func ServeHTTP(r ghp.Request, w ghp.Response)` will be called to handle HTTP requests.
 - Hot-reloading at runtime without the need to restart a server.
 - Source graph optionally computed live for perfect dependency knowledge — change a source file in a far-away dependency and have appropriate GHP endpoints be recompiled and reloaded.
+- Dead-simple Zero-Downtime Restarts out of the box
 
 
 ### GHP page example:
@@ -67,6 +68,43 @@ Content-Type: text/plain; charset=utf-8
 
 Hello world
 ```
+
+Servlets can additionally provide the optional
+`StartServlet` and `StopServlet` functions, called when a servlet instance
+has been started and is stopping, respectively.
+
+`StopServlet` is called just after a servlet has been disconnected from
+receiving any new requests. This might happen when a new instance (version)
+of the same servlet has been started, or when GHP is shutting down.
+
+During a graceful shutdown of GHP,
+for instance from SIGHUP or [ZDR](#zero-downtime-restarts),
+or when a servlet instance is replaced with a newer version, `StopServlet`
+may block while completing any ongoing work, like shutting down a websocket
+or writing data to disk.
+
+`StartServlet` can be useful for setting up shared resources, or for picking
+up shared state from a past servlet instance.
+
+
+## Zero-Downtime Restarts
+
+GHP supports seamless restarts where the server never stops listening for
+connections. ZDR is enabled by default and doesn't require you to launch
+`ghp` processes in any special way.
+
+- Coordination is per directory served. i.e. a GHP process serving a certain
+  directory will coordinate with any other GHP process that is launched to
+  serve the same directory.
+- Works by transferring ownership of listener file descriptors via a Unix
+  socket, thus ZDR works on any POSIX system where Unix sockets are enabled.
+- Gracefully shuts down an older process, completeing in-flight requests while
+  at the same the newer process starts serving new requests concurrently.
+- Servlets can hook into this system by simply providing the optional
+  `StopServlet` and `StartServlet` functions.
+- Coordination can be customized using a config file by setting `zdr.group` to
+  a unique string that is unique to the host machine.
+
 
 ## Usage
 

@@ -130,6 +130,7 @@ func (s *Servlet) Stop() error {
   }
   if s.stopFun != nil {
     s.stopFun(s.ctx)
+    s.stopFun = nil
   }
   return nil
 }
