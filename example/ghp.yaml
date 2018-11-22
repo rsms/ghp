@@ -4,12 +4,12 @@ pub-dir: pub
 # accept both HTTP/1.1 and HTTPS/2 connections
 servers:
   - &s1
-    address: localhost:8002
+    address: 127.0.0.1:8002
     dirlist:
       enabled: true
 
   - <<: *s1
-    address: localhost:8443
+    address: 127.0.0.1:8443
     type: https
     tls-cert-file: tls/localhost.cert
     tls-key-file:  tls/localhost.key
