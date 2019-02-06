@@ -98,7 +98,7 @@ connections. ZDR is enabled by default and doesn't require you to launch
   serve the same directory.
 - Works by transferring ownership of listener file descriptors via a Unix
   socket, thus ZDR works on any POSIX system where Unix sockets are enabled.
-- Gracefully shuts down an older process, completeing in-flight requests while
+- Gracefully shuts down an older process, completing in-flight requests while
   at the same the newer process starts serving new requests concurrently.
 - Servlets can hook into this system by simply providing the optional
   `StopServlet` and `StartServlet` functions.
